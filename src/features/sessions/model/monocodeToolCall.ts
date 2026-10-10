@@ -24,6 +24,7 @@ const ACTION_LABELS: Record<string, string> = {
   "artifacts.list": "List artifacts",
   "artifacts.read": "Read an artifact",
   "artifacts.write": "Write an artifact",
+  "chat.ask": "Ask the user",
 };
 
 /** Conservatively parse one shell invocation; compound commands use the shell row. */

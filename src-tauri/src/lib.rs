@@ -10,6 +10,7 @@ mod codex_mono_store;
 mod control;
 pub mod control_cli;
 mod cursor_store;
+mod decision_cards;
 mod devin_config;
 mod devin_usage;
 mod external_editor;
@@ -492,6 +493,9 @@ pub fn run() {
             session_store::cancel_session_search,
             session_store::session_get,
             mono_transcript::mono_session_get,
+            decision_cards::decision_card_ask,
+            decision_cards::decision_card_claim,
+            decision_cards::decision_card_release,
             mono_transcript::mono_session_page,
             mono_transcript::mono_session_upsert,
             mono_transcript::mono_session_find,

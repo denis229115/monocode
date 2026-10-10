@@ -40,6 +40,8 @@ pub struct MonoPage {
     pub blocks: Vec<Value>,
     pub before: Option<i64>,
     pub has_newer: bool,
+    /// Decision cards asked in this page's turns.
+    pub decision_cards: Vec<Value>,
 }
 
 #[derive(Serialize)]
@@ -237,10 +239,13 @@ fn page(
         params![id, end],
         |row| row.get(0),
     )?;
+    let decision_cards =
+        crate::decision_cards::list(conn, id, &crate::decision_cards::block_ids(&blocks), false)?;
     Ok(MonoPage {
         blocks,
         before: (starts.len() > PAGE_TURNS as usize).then_some(start),
         has_newer,
+        decision_cards,
     })
 }
 
@@ -263,6 +268,10 @@ pub fn mono_session_get(
         .first()
         .and_then(|block| block["id"].as_str())
         .map(str::to_string);
+    // The latest page's cards, and every waiting card from older turns.
+    let turns = crate::decision_cards::block_ids(&page.blocks);
+    session.decision_cards =
+        crate::decision_cards::list(&conn, &session_id, &turns, true).map_err(|e| e.to_string())?;
     session.blocks = json!(page.blocks);
     Ok(Some(MonoRecord {
         session,

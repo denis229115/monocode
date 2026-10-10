@@ -70,6 +70,8 @@ import { MonoHeader } from "../../monos/ui/MonoHeader";
 import { MonoComposer } from "../../monos/ui/MonoComposer";
 import { MonoUsageLimitNotice } from "../../monos/ui/MonoUsageLimitNotice";
 import { QuestionForm } from "./QuestionForm";
+import { DecisionCardPanel } from "./DecisionCards";
+import { waitingDecisionCards } from "../model/decisionCard";
 import {
   monoMessageDeliveries,
   monoPendingTranscriptBlocks,
@@ -211,6 +213,11 @@ export type SessionPaneProps = {
     reply: UserQuestionReply,
   ) => void;
   onQuestionInteraction?: (sessionId: string, requestId: number) => void;
+  onDecisionAnswer?: (
+    sessionId: string,
+    cardId: string,
+    reply: UserQuestionReply,
+  ) => void;
   onOpenFile: (path: string) => void;
   onOpenDiff: (
     path?: string,
@@ -338,6 +345,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
   onApproval,
   onQuestionReply,
   onQuestionInteraction,
+  onDecisionAnswer,
   onOpenFile,
   onOpenDiff,
   onCommitChanges,
@@ -432,6 +440,20 @@ const LocalSessionPane = memo(function LocalSessionPane({
       onQuestionReply(session.id, requestId, reply),
     [onQuestionReply, session.id],
   );
+  const waitingDecisions = useMemo(
+    () => waitingDecisionCards(session.decisionCards),
+    [session.decisionCards],
+  );
+  const decisionPanel =
+    waitingDecisions.length && onDecisionAnswer ? (
+      <DecisionCardPanel
+        cards={waitingDecisions}
+        cwd={session.cwd}
+        onAnswer={(cardId, reply) =>
+          onDecisionAnswer(session.id, cardId, reply)
+        }
+      />
+    ) : null;
   const openPlan = useCallback(
     (blockId: string) => onOpenPlan(session.id, blockId),
     [onOpenPlan, session.id],
@@ -664,6 +686,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
       noteCard={session.noteCard}
       handoffCard={session.handoffCard}
       question={session.pendingQuestion}
+      decisions={decisionPanel}
       onQuoteRequestConsumed={acknowledgeQuote}
       onInboxCardDismiss={() => onInboxCardDismiss?.(session.id)}
       onNoteCardDismiss={() => onNoteCardDismiss?.(session.id)}
@@ -919,6 +942,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                         : monoTranscript.blocks
                     }
                     historicalBlockIds={monoTranscript.historicalBlockIds}
+                    decisionCards={monoTranscript.decisionCards}
                     initialTurns={agent ? MONO_PAGE_TURNS : undefined}
                     pageSize={agent ? MONO_PAGE_TURNS : undefined}
                     hasEarlier={monoTranscript.hasEarlier}
@@ -1130,7 +1154,9 @@ const LocalSessionPane = memo(function LocalSessionPane({
                         onQuestionInteraction?.(session.id, id)
                       }
                     />
-                  ) : null}
+                  ) : (
+                    decisionPanel
+                  )}
                   {session.usageLimit ? (
                     <MonoUsageLimitNotice
                       session={session}
