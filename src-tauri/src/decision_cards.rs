@@ -1,14 +1,15 @@
 //! Decision cards agents leave in a chat with `app chat.ask`. They live beside
 //! the transcript rather than in it, so a card is found, retried and settled by
 //! its request ID however little of a long conversation is loaded.
+use std::collections::HashSet;
+
 use rusqlite::{params, Connection, OptionalExtension};
+use serde::Serialize;
 use serde_json::Value;
 use tauri::State;
 
 use crate::session_store::{self, SessionStore};
 
-/// Settled cards a session loads besides its waiting ones, the newest first.
-const LOADED_SETTLED: i64 = 200;
 const MAX_CARD_BYTES: usize = 64 * 1024;
 
 pub(crate) fn ensure_table(conn: &Connection) -> rusqlite::Result<()> {
@@ -55,8 +56,49 @@ pub(crate) fn ask(conn: &Connection, session_id: &str, card: &Value) -> rusqlite
     stored(conn, session_id, card_id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)
 }
 
-/// Answers or dismisses a waiting card. A settled card keeps its first outcome.
-pub(crate) fn settle(
+/// A claim's result: the card as stored, and whether this caller settled it.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Claim {
+    card: Option<Value>,
+    claimed: bool,
+}
+
+/// Settles a waiting card with the first outcome to arrive, from any window.
+/// Only the caller that claims it may send its answer; later claims change
+/// nothing and learn the stored outcome.
+pub(crate) fn claim(
+    conn: &Connection,
+    session_id: &str,
+    card_id: &str,
+    outcome: &Value,
+) -> rusqlite::Result<Claim> {
+    let Some(mut card) = stored(conn, session_id, card_id)? else {
+        return Ok(Claim {
+            card: None,
+            claimed: false,
+        });
+    };
+    if card.get("outcome").is_some() {
+        return Ok(Claim {
+            card: Some(card),
+            claimed: false,
+        });
+    }
+    card["outcome"] = outcome.clone();
+    let changed = conn.execute(
+        "UPDATE decision_cards SET card_json = ?3, waiting = 0 WHERE session_id = ?1 AND card_id = ?2 AND waiting = 1",
+        params![session_id, card_id, card.to_string()],
+    )?;
+    Ok(Claim {
+        card: stored(conn, session_id, card_id)?,
+        claimed: changed == 1,
+    })
+}
+
+/// Gives back a claim whose answer could not be sent, so the card waits again.
+/// Another caller's outcome is left alone.
+pub(crate) fn release(
     conn: &Connection,
     session_id: &str,
     card_id: &str,
@@ -65,30 +107,51 @@ pub(crate) fn settle(
     let Some(mut card) = stored(conn, session_id, card_id)? else {
         return Ok(None);
     };
-    if card.get("outcome").is_some() {
+    if card.get("outcome") != Some(outcome) {
         return Ok(Some(card));
     }
-    card["outcome"] = outcome.clone();
+    if let Some(fields) = card.as_object_mut() {
+        fields.remove("outcome");
+    }
     conn.execute(
-        "UPDATE decision_cards SET card_json = ?3, waiting = 0 WHERE session_id = ?1 AND card_id = ?2 AND waiting = 1",
+        "UPDATE decision_cards SET card_json = ?3, waiting = 1 WHERE session_id = ?1 AND card_id = ?2",
         params![session_id, card_id, card.to_string()],
     )?;
     stored(conn, session_id, card_id)
 }
 
-/// Every waiting card and the latest settled ones, in the order they were asked.
-pub(crate) fn list(conn: &Connection, session_id: &str) -> rusqlite::Result<Vec<Value>> {
+/// The cards asked in the given turns, in the order they were asked, and with
+/// `waiting` every waiting card too, wherever its turn is.
+pub(crate) fn list(
+    conn: &Connection,
+    session_id: &str,
+    turns: &HashSet<&str>,
+    waiting: bool,
+) -> rusqlite::Result<Vec<Value>> {
     let mut statement = conn.prepare(
-        "SELECT card_json FROM decision_cards WHERE session_id = ?1 AND (waiting = 1 OR rowid IN (
-           SELECT rowid FROM decision_cards WHERE session_id = ?1 AND waiting = 0 ORDER BY rowid DESC LIMIT ?2
-         )) ORDER BY rowid",
+        "SELECT card_json, waiting FROM decision_cards WHERE session_id = ?1 ORDER BY rowid",
     )?;
-    let rows = statement.query_map(params![session_id, LOADED_SETTLED], |row| {
-        row.get::<_, String>(0)
+    let rows = statement.query_map([session_id], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?))
     })?;
     Ok(rows
-        .filter_map(|raw| raw.ok().and_then(|raw| serde_json::from_str(&raw).ok()))
+        .filter_map(|row| row.ok())
+        .filter_map(|(raw, is_waiting)| {
+            let card: Value = serde_json::from_str(&raw).ok()?;
+            let in_turn = card["turnId"]
+                .as_str()
+                .is_some_and(|turn| turns.contains(turn));
+            (in_turn || (waiting && is_waiting)).then_some(card)
+        })
         .collect())
+}
+
+/// The ids of loaded blocks, which name the turns their cards were asked in.
+pub(crate) fn block_ids(blocks: &[Value]) -> HashSet<&str> {
+    blocks
+        .iter()
+        .filter_map(|block| block["id"].as_str())
+        .collect()
 }
 
 pub(crate) fn delete_for_session(conn: &Connection, session_id: &str) -> rusqlite::Result<()> {
@@ -119,7 +182,19 @@ pub fn decision_card_ask(
 }
 
 #[tauri::command(async)]
-pub fn decision_card_settle(
+pub fn decision_card_claim(
+    store: State<'_, SessionStore>,
+    session_id: String,
+    card_id: String,
+    outcome: Value,
+) -> Result<Claim, String> {
+    ids(&session_id, &card_id)?;
+    let conn = store.lock_conn()?;
+    claim(&conn, &session_id, &card_id, &outcome).map_err(|e| e.to_string())
+}
+
+#[tauri::command(async)]
+pub fn decision_card_release(
     store: State<'_, SessionStore>,
     session_id: String,
     card_id: String,
@@ -127,7 +202,7 @@ pub fn decision_card_settle(
 ) -> Result<Option<Value>, String> {
     ids(&session_id, &card_id)?;
     let conn = store.lock_conn()?;
-    settle(&conn, &session_id, &card_id, &outcome).map_err(|e| e.to_string())
+    release(&conn, &session_id, &card_id, &outcome).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -141,6 +216,13 @@ mod tests {
         conn
     }
 
+    fn ids(cards: &[Value]) -> Vec<&str> {
+        cards
+            .iter()
+            .map(|card| card["id"].as_str().unwrap())
+            .collect()
+    }
+
     #[test]
     fn a_repeated_request_id_returns_the_first_card_even_when_settled() {
         let conn = conn();
@@ -148,8 +230,9 @@ mod tests {
         assert_eq!(ask(&conn, "s", &first).unwrap(), first);
         let other = json!({"id": "ask-1", "turnId": "t9", "questions": [{"prompt": "Other?"}]});
         assert_eq!(ask(&conn, "s", &other).unwrap(), first);
-        let dismissed = settle(&conn, "s", "ask-1", &json!({"kind": "dismissed", "at": 2}))
+        let dismissed = claim(&conn, "s", "ask-1", &json!({"kind": "dismissed", "at": 2}))
             .unwrap()
+            .card
             .unwrap();
         assert_eq!(dismissed["outcome"]["kind"], "dismissed");
         assert_eq!(ask(&conn, "s", &first).unwrap(), dismissed);
@@ -158,39 +241,72 @@ mod tests {
     }
 
     #[test]
-    fn a_settled_card_keeps_its_first_outcome() {
+    fn only_the_first_claim_wins_and_a_later_one_learns_its_outcome() {
         let conn = conn();
-        ask(&conn, "s", &json!({"id": "a", "questions": []})).unwrap();
-        settle(&conn, "s", "a", &json!({"kind": "answered", "at": 1})).unwrap();
-        let again = settle(&conn, "s", "a", &json!({"kind": "dismissed", "at": 2}))
-            .unwrap()
-            .unwrap();
-        assert_eq!(again["outcome"]["kind"], "answered");
-        assert!(settle(&conn, "s", "missing", &json!({"kind": "dismissed"}))
-            .unwrap()
-            .is_none());
+        ask(&conn, "s", &json!({"id": "a", "turnId": "t"})).unwrap();
+        let yes = json!({"kind": "answered", "at": 1, "reply": {"answers": {"q1": ["yes"]}}});
+        let no = json!({"kind": "answered", "at": 1, "reply": {"answers": {"q1": ["no"]}}});
+        let first = claim(&conn, "s", "a", &yes).unwrap();
+        assert!(first.claimed);
+        let second = claim(&conn, "s", "a", &no).unwrap();
+        assert!(!second.claimed);
+        assert_eq!(second.card.unwrap()["outcome"], yes);
+        assert!(!claim(&conn, "s", "missing", &yes).unwrap().claimed);
     }
 
     #[test]
-    fn loads_every_waiting_card_and_only_the_latest_settled_ones() {
+    fn a_released_claim_waits_again_but_another_outcome_is_kept() {
         let conn = conn();
-        ask(&conn, "s", &json!({"id": "oldest-waiting"})).unwrap();
-        for index in 0..(LOADED_SETTLED + 5) {
+        ask(&conn, "s", &json!({"id": "a", "turnId": "t"})).unwrap();
+        let yes = json!({"kind": "answered", "at": 1});
+        let no = json!({"kind": "answered", "at": 2});
+        claim(&conn, "s", "a", &yes).unwrap();
+        // Someone else's outcome stays.
+        assert_eq!(
+            release(&conn, "s", "a", &no).unwrap().unwrap()["outcome"],
+            yes
+        );
+        let released = release(&conn, "s", "a", &yes).unwrap().unwrap();
+        assert!(released.get("outcome").is_none());
+        let loaded = list(&conn, "s", &HashSet::new(), true).unwrap();
+        assert_eq!(ids(&loaded), ["a"]);
+        assert!(claim(&conn, "s", "a", &no).unwrap().claimed);
+    }
+
+    #[test]
+    fn loads_waiting_cards_and_every_settled_card_of_the_loaded_turns() {
+        let conn = conn();
+        ask(&conn, "s", &json!({"id": "old-waiting", "turnId": "t-0"})).unwrap();
+        // More settled cards than any cap, all in turns that are loaded.
+        for index in 0..250 {
             let id = format!("settled-{index}");
-            ask(&conn, "s", &json!({ "id": id })).unwrap();
-            settle(&conn, "s", &id, &json!({"kind": "dismissed"})).unwrap();
+            ask(
+                &conn,
+                "s",
+                &json!({ "id": id, "turnId": format!("t-{index}") }),
+            )
+            .unwrap();
+            claim(&conn, "s", &id, &json!({"kind": "dismissed"})).unwrap();
         }
-        ask(&conn, "s", &json!({"id": "newest-waiting"})).unwrap();
-        let ids: Vec<String> = list(&conn, "s")
-            .unwrap()
-            .iter()
-            .map(|card| card["id"].as_str().unwrap().to_string())
-            .collect();
-        assert_eq!(ids.len() as i64, LOADED_SETTLED + 2);
-        assert_eq!(ids.first().unwrap(), "oldest-waiting");
-        assert_eq!(ids[1], "settled-5");
-        assert_eq!(ids.last().unwrap(), "newest-waiting");
+        ask(&conn, "s", &json!({"id": "new-waiting", "turnId": "t-999"})).unwrap();
+        let turns: Vec<String> = (0..250).map(|index| format!("t-{index}")).collect();
+        let all: HashSet<&str> = turns.iter().map(String::as_str).collect();
+        let loaded = list(&conn, "s", &all, true).unwrap();
+        assert_eq!(loaded.len(), 252);
+        assert_eq!(ids(&loaded)[..2], ["old-waiting", "settled-0"]);
+        assert_eq!(*ids(&loaded).last().unwrap(), "new-waiting");
+        // An older page brings only its own turns' cards.
+        let page: HashSet<&str> = ["t-0", "t-1"].into_iter().collect();
+        assert_eq!(
+            ids(&list(&conn, "s", &page, false).unwrap()),
+            ["old-waiting", "settled-0", "settled-1"]
+        );
+        // Nothing loaded: the waiting cards only.
+        assert_eq!(
+            ids(&list(&conn, "s", &HashSet::new(), true).unwrap()),
+            ["old-waiting", "new-waiting"]
+        );
         delete_for_session(&conn, "s").unwrap();
-        assert!(list(&conn, "s").unwrap().is_empty());
+        assert!(list(&conn, "s", &all, true).unwrap().is_empty());
     }
 }

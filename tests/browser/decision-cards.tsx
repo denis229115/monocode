@@ -195,7 +195,7 @@ function Pane({
   );
 }
 
-/** Cards as storage keeps them: each settles once, like the app's store. */
+/** Cards as storage keeps them: the first claim settles each, like the app's store. */
 const stored = new Map(
   initial.flatMap((entry) =>
     (entry.decisionCards ?? []).map((card) => [`${entry.id}:${card.id}`, card]),
@@ -230,10 +230,17 @@ function Fixture() {
         );
         return true;
       },
-      settle: async (sessionId, cardId, outcome) => {
+      claim: async (sessionId, cardId, outcome) => {
         const key = `${sessionId}:${cardId}`;
         const card = stored.get(key);
-        if (card && !card.outcome) stored.set(key, { ...card, outcome });
+        if (!card || card.outcome) return { card, claimed: false };
+        stored.set(key, { ...card, outcome });
+        return { card: stored.get(key), claimed: true };
+      },
+      release: async (sessionId, cardId, outcome) => {
+        const key = `${sessionId}:${cardId}`;
+        const card = stored.get(key);
+        if (card?.outcome === outcome) stored.set(key, { ...card, outcome: undefined });
         return stored.get(key);
       },
       show: (sessionId, card) =>

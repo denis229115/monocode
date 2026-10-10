@@ -1950,13 +1950,20 @@ fn get_session_record(
                     Box::new(e),
                 )
             })?;
-            let blocks = serde_json::from_str(&blocks_raw).map_err(|e| {
+            let blocks: Value = serde_json::from_str(&blocks_raw).map_err(|e| {
                 rusqlite::Error::FromSqlConversionFailure(
                     8,
                     rusqlite::types::Type::Text,
                     Box::new(e),
                 )
             })?;
+            // Every card of the turns loaded here, and every waiting one.
+            let decision_cards = crate::decision_cards::list(
+                conn,
+                session_id,
+                &crate::decision_cards::block_ids(blocks.as_array().map_or(&[], Vec::as_slice)),
+                true,
+            )?;
             Ok(SessionRecord {
                 sidebar_hidden: row.get::<_, i64>(21)? != 0,
                 id: row.get(0)?,
@@ -1985,7 +1992,7 @@ fn get_session_record(
                 linked_work_item: optional_json(row.get(15)?),
                 provider_account_id: row.get(16)?,
                 automation_id: nonempty(row.get(18)?),
-                decision_cards: crate::decision_cards::list(conn, session_id)?,
+                decision_cards,
                 created_at: row.get(9)?,
                 updated_at: row.get(10)?,
             })

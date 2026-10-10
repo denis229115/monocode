@@ -423,7 +423,7 @@ function FloatingConversation({
               : monoPendingTranscriptBlocks(session, transcript.blocks)
           }
           historicalBlockIds={transcript.historicalBlockIds}
-          decisionCards={session.decisionCards}
+          decisionCards={transcript.decisionCards}
           initialTurns={MONO_PAGE_TURNS}
           pageSize={MONO_PAGE_TURNS}
           busy={!!session.busy && !transcript.viewingOlderPage}

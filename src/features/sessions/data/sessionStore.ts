@@ -48,7 +48,10 @@ import type {
 import { HARNESSES, RUNTIME_MODES } from "../model/session";
 
 import { restoreOrchestrationProposal } from "../../orchestration/model/orchestrationPlan";
-import { restoreDecisionCards } from "../model/decisionCard";
+import {
+  restoreDecisionCards,
+  type DecisionCard,
+} from "../model/decisionCard";
 
 import type { OrchestrationSummary } from "../../orchestration/model/orchestrationSummary";
 
@@ -566,6 +569,8 @@ export type MonoTranscriptPage = {
   blocks: Block[];
   before: number | null;
   hasNewer: boolean;
+  /** Decision cards asked in this page's turns. */
+  decisionCards: DecisionCard[];
 };
 
 export async function getMonoTranscriptPage(
@@ -576,7 +581,9 @@ export async function getMonoTranscriptPage(
     aroundBlockId?: string;
   } = {},
 ): Promise<MonoTranscriptPage> {
-  const page = await invoke<MonoTranscriptPage>("mono_session_page", {
+  const page = await invoke<
+    Omit<MonoTranscriptPage, "decisionCards"> & { decisionCards?: unknown }
+  >("mono_session_page", {
     sessionId,
     before: options.before ?? null,
     beforeBlockId: options.beforeBlockId ?? null,
@@ -584,6 +591,7 @@ export async function getMonoTranscriptPage(
   });
   return {
     ...page,
+    decisionCards: restoreDecisionCards(page.decisionCards),
     blocks: page.blocks
       .map((block) => sanitizeBlock(block, { hydrate: true }))
       .filter((block): block is Block => !!block),

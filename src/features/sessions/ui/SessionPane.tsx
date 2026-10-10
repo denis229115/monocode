@@ -942,7 +942,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                         : monoTranscript.blocks
                     }
                     historicalBlockIds={monoTranscript.historicalBlockIds}
-                    decisionCards={session.decisionCards}
+                    decisionCards={monoTranscript.decisionCards}
                     initialTurns={agent ? MONO_PAGE_TURNS : undefined}
                     pageSize={agent ? MONO_PAGE_TURNS : undefined}
                     hasEarlier={monoTranscript.hasEarlier}

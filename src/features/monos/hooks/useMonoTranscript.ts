@@ -37,6 +37,15 @@ export function useMonoTranscript(session: Session, enabled: boolean) {
       historicalBlockIds: new Set(historicalBlocks.map((block) => block.id)),
     };
   }, [history, session.blocks]);
+  // Older pages bring their turns' cards; the session's own copies are newer.
+  const decisionCards = useMemo(() => {
+    if (!history?.decisionCards.length) return session.decisionCards;
+    const live = new Set(session.decisionCards?.map((card) => card.id));
+    return [
+      ...history.decisionCards.filter((card) => !live.has(card.id)),
+      ...(session.decisionCards ?? []),
+    ];
+  }, [history, session.decisionCards]);
   const blocksRef = useRef(blocks);
   blocksRef.current = blocks;
 
@@ -50,6 +59,10 @@ export function useMonoTranscript(session: Session, enabled: boolean) {
       ...page,
       hasNewer: previous?.hasNewer ?? false,
       blocks: [...page.blocks, ...(previous?.blocks ?? [])],
+      decisionCards: [
+        ...page.decisionCards,
+        ...(previous?.decisionCards ?? []),
+      ],
     }));
   }, [before, session.id]);
 
@@ -81,6 +94,7 @@ export function useMonoTranscript(session: Session, enabled: boolean) {
 
   return {
     blocks: enabled ? blocks : session.blocks,
+    decisionCards: enabled ? decisionCards : session.decisionCards,
     historicalBlockIds: enabled ? historicalBlockIds : undefined,
     hasEarlier: enabled && before != null,
     loadEarlier,

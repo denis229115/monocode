@@ -624,7 +624,8 @@ import {
 import { decisionAnswerer } from "../features/sessions/model/decisionAnswers";
 import {
   askDecisionCard,
-  settleDecisionCard,
+  claimDecisionCard,
+  releaseDecisionCard,
 } from "../features/sessions/data/decisionCards";
 import {
   MonoChangesPanel,
@@ -10111,8 +10112,8 @@ function Workspace({
   );
 
   /**
-   * Sends a decision card's answers as the agent's next message, after any
-   * running turn, then saves the card as answered.
+   * Saves a decision card's outcome first, then sends its answers as the
+   * agent's next message, after any running turn.
    */
   const answerDecision = useRef(
     decisionAnswerer({
@@ -10122,11 +10123,29 @@ function Workspace({
           ? findDecisionCard(session, cardId)
           : undefined;
       },
-      send: (sessionId, text) =>
-        submitSessionRef.current(sessionId, text, [], {
+      claim: claimDecisionCard,
+      release: releaseDecisionCard,
+      send: async (sessionId, text) => {
+        const accepted = await submitSessionRef.current(sessionId, text, [], {
           followUpBehavior: "queue",
-        }),
-      settle: settleDecisionCard,
+        });
+        if (!accepted) return false;
+        // The card is already saved as answered; save the message carrying
+        // the answer too, rather than waiting for the next routine save. The
+        // no-op update reads the session with the queued message applied.
+        let latest: Session | undefined;
+        flushSync(() =>
+          setSessions((prev) => {
+            latest = prev.find((s) => s.id === sessionId);
+            return prev;
+          }),
+        );
+        if (latest && shouldPersistSession(latest))
+          await upsertSession(latest).catch((error) =>
+            console.error("Failed to save the decision answer:", error),
+          );
+        return true;
+      },
       show: (sessionId, card) =>
         setSessions((prev) =>
           prev.map((s) => (s.id === sessionId ? withDecisionCard(s, card) : s)),

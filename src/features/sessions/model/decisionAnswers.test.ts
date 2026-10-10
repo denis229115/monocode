@@ -6,78 +6,147 @@ import {
   type DecisionOutcome,
 } from "./decisionCard";
 
-/** Cards as storage keeps them, settled once, as the Rust store does. */
-function fixture(accept: boolean | Promise<boolean> = true) {
-  const stored = new Map<string, DecisionCard>([
-    [
-      "old",
-      {
-        id: "old",
-        // A Mono turn far older than the loaded transcript.
-        turnId: "turn-from-last-month",
-        askedAt: 1,
-        questions: parseDecisionQuestions([
-          { question: "Merge now?", options: [{ label: "Yes", value: "yes" }] },
-        ]),
-      },
-    ],
-  ]);
-  const shown: DecisionCard[] = [];
-  const host: DecisionAnswerHost = {
-    card: (_sessionId, cardId) => stored.get(cardId),
-    send: vi.fn(() => accept),
-    settle: vi.fn(async (_s: string, cardId: string, outcome: DecisionOutcome) => {
-      const card = stored.get(cardId);
-      if (!card) return undefined;
-      if (!card.outcome) stored.set(cardId, { ...card, outcome });
-      return stored.get(cardId);
+const asked: DecisionCard = {
+  id: "old",
+  // A Mono turn far older than the loaded transcript.
+  turnId: "turn-from-last-month",
+  askedAt: 1,
+  questions: parseDecisionQuestions([
+    {
+      question: "Merge now?",
+      options: [
+        { label: "Yes", value: "yes" },
+        { label: "No", value: "no" },
+      ],
+    },
+  ]),
+};
+
+/** The card table as the Rust store keeps it: the first claim wins. */
+function store() {
+  let card: DecisionCard = asked;
+  const delivered: string[] = [];
+  return {
+    delivered,
+    stored: () => card,
+    claim: vi.fn(async (_s: string, _id: string, outcome: DecisionOutcome) => {
+      if (card.outcome) return { card, claimed: false };
+      card = { ...card, outcome };
+      return { card, claimed: true };
     }),
-    show: (_sessionId, card) => shown.push(card),
-    now: () => 7,
+    release: vi.fn(async (_s: string, _id: string, outcome: DecisionOutcome) => {
+      if (card.outcome === outcome) card = asked;
+      return card;
+    }),
   };
-  return { host, stored, shown, answer: decisionAnswerer(host) };
 }
 
-const yes = { kind: "answered" as const, answers: { q1: ["yes"] } };
+/** One window: its own copy of the card, sending to the shared session. */
+function window(
+  shared: ReturnType<typeof store>,
+  send: DecisionAnswerHost["send"] = (_s, text) => {
+    shared.delivered.push(text);
+    return true;
+  },
+) {
+  let seen: DecisionCard = asked;
+  const host: DecisionAnswerHost = {
+    card: () => seen,
+    claim: shared.claim,
+    release: shared.release,
+    send: vi.fn(send),
+    show: (_s, card) => {
+      seen = card;
+    },
+    now: () => 7,
+  };
+  return { host, seen: () => seen, answer: decisionAnswerer(host) };
+}
+
+const reply = (value: string) => ({
+  kind: "answered" as const,
+  answers: { q1: [value] },
+});
 
 describe("answering a decision card", () => {
-  it("sends the answer to the asking session, then saves and shows the card as answered", async () => {
-    const { host, stored, shown, answer } = fixture();
-    await answer("mono", "old", yes);
-    expect(host.send).toHaveBeenCalledWith("mono", "Merge now?\nyes");
-    expect(stored.get("old")?.outcome).toEqual({
+  it("saves the answer first, then sends it to the asking session", async () => {
+    const shared = store();
+    const { answer, seen } = window(shared);
+    await answer("mono", "old", reply("yes"));
+    expect(shared.stored().outcome).toEqual({
       kind: "answered",
       at: 7,
-      reply: yes,
+      reply: reply("yes"),
     });
-    expect(shown.map((card) => card.outcome?.kind)).toEqual(["answered"]);
+    expect(shared.delivered).toEqual(["Merge now?\nyes"]);
+    expect(seen().outcome?.kind).toBe("answered");
+  });
+
+  it("sends only the first of two conflicting answers from different windows", async () => {
+    const shared = store();
+    const left = window(shared);
+    const right = window(shared);
+    await Promise.all([
+      left.answer("mono", "old", reply("yes")),
+      right.answer("mono", "old", reply("no")),
+    ]);
+    expect(shared.delivered).toEqual(["Merge now?\nyes"]);
+    expect(right.host.send).not.toHaveBeenCalled();
+    // The late window now shows the answer that won.
+    expect(right.seen().outcome).toEqual(shared.stored().outcome);
   });
 
   it("sends once when Continue is clicked again before the first answer lands", async () => {
-    let release!: (accepted: boolean) => void;
-    const { host, answer } = fixture(
-      new Promise<boolean>((resolve) => (release = resolve)),
+    const shared = store();
+    let accept!: (accepted: boolean) => void;
+    const { host, answer } = window(
+      shared,
+      () => new Promise<boolean>((resolve) => (accept = resolve)),
     );
-    const first = answer("mono", "old", yes);
-    await answer("mono", "old", yes);
-    release(true);
+    const first = answer("mono", "old", reply("yes"));
+    await answer("mono", "old", reply("yes"));
+    await vi.waitFor(() => expect(host.send).toHaveBeenCalled());
+    accept(true);
     await first;
-    await answer("mono", "old", yes);
+    await answer("mono", "old", reply("yes"));
     expect(host.send).toHaveBeenCalledTimes(1);
-    expect(host.settle).toHaveBeenCalledTimes(1);
+    expect(shared.claim).toHaveBeenCalledTimes(1);
   });
 
-  it("leaves the card waiting when the session refuses the message", async () => {
-    const { host, stored, answer } = fixture(false);
-    await answer("mono", "old", yes);
-    expect(host.settle).not.toHaveBeenCalled();
-    expect(stored.get("old")?.outcome).toBeUndefined();
+  it("sends nothing when saving fails, and once when the user tries again", async () => {
+    const shared = store();
+    const { host, answer } = window(shared);
+    shared.claim.mockRejectedValueOnce(new Error("database is locked"));
+    await expect(answer("mono", "old", reply("yes"))).rejects.toThrow("locked");
+    expect(host.send).not.toHaveBeenCalled();
+    expect(shared.stored().outcome).toBeUndefined();
+    await answer("mono", "old", reply("yes"));
+    await answer("mono", "old", reply("yes"));
+    expect(shared.delivered).toEqual(["Merge now?\nyes"]);
+  });
+
+  it("puts the card back to waiting when the session refuses the message", async () => {
+    const shared = store();
+    let refuse = true;
+    const { answer, seen } = window(shared, (_s, text) => {
+      if (refuse) return false;
+      shared.delivered.push(text);
+      return true;
+    });
+    await answer("mono", "old", reply("yes"));
+    expect(shared.stored().outcome).toBeUndefined();
+    expect(seen().outcome).toBeUndefined();
+    refuse = false;
+    await answer("mono", "old", reply("no"));
+    expect(shared.delivered).toEqual(["Merge now?\nno"]);
+    expect(shared.stored().outcome?.kind).toBe("answered");
   });
 
   it("dismisses a card whose questions were all skipped, without sending", async () => {
-    const { host, stored, answer } = fixture();
+    const shared = store();
+    const { host, answer } = window(shared);
     await answer("mono", "old", { kind: "skipped" });
     expect(host.send).not.toHaveBeenCalled();
-    expect(stored.get("old")?.outcome).toEqual({ kind: "dismissed", at: 7 });
+    expect(shared.stored().outcome).toEqual({ kind: "dismissed", at: 7 });
   });
 });

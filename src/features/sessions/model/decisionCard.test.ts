@@ -195,6 +195,12 @@ describe("saved cards", () => {
       [question({ options: [{ id: CUSTOM_OPTION_ID, label: "Other" }] })],
       Array(5).fill(question({})),
       [],
+      [question({ prompt: "   " })],
+      [question({ prompt: "x".repeat(2001) })],
+      [question({ id: "x".repeat(65) })],
+      [question({ header: "" })],
+      [question({ options: [{ id: "a", label: "" }] })],
+      [question({ options: [{ id: "a", label: "A", description: "x".repeat(501) }] })],
     ])
       expect(
         restoreDecisionCard({ id: "saved", turnId: "t", questions }),

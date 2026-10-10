@@ -299,30 +299,27 @@ function restoredOutcome(value: unknown): DecisionOutcome | undefined {
   };
 }
 
+/** A saved question, through the same field checks as the CLI's input. */
 function restoredQuestion(value: unknown): UserQuestion {
   const q = (value ?? {}) as Record<string, unknown>;
-  if (typeof q.id !== "string" || typeof q.prompt !== "string")
-    throw new Error("A saved question needs an id and a prompt");
   const options = Array.isArray(q.options)
     ? q.options.map((entry): UserQuestionOption => {
         const o = (entry ?? {}) as Record<string, unknown>;
-        if (typeof o.id !== "string" || typeof o.label !== "string")
-          throw new Error("A saved option needs an id and a label");
         return {
-          id: o.id,
-          label: o.label,
-          ...(typeof o.description === "string"
-            ? { description: o.description }
-            : {}),
+          id: line(o.id, "value", 500),
+          label: line(o.label, "label", 120),
+          ...(o.description === undefined
+            ? {}
+            : { description: text(o.description, "description", 500) }),
           ...(o.recommended === true ? { recommended: true } : {}),
         };
       })
     : [];
   const links = Array.isArray(q.links) ? q.links.map(webLink) : [];
   return {
-    id: q.id,
-    ...(typeof q.header === "string" ? { header: q.header } : {}),
-    prompt: q.prompt,
+    id: line(q.id, "id", 64),
+    ...(q.header === undefined ? {} : { header: line(q.header, "header", 60) }),
+    prompt: text(q.prompt, "question", 2000),
     multiSelect: q.multiSelect === true,
     allowCustom: q.allowCustom !== false,
     exactOptions: true,
