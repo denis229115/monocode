@@ -59,7 +59,7 @@ readline.createInterface({input: process.stdin}).on('line', line => {
   if (request.method === 'model/list') send({id: request.id, result: {data: [{model: 'fixture-model', displayName: 'Fixture model', supportedReasoningEfforts: ['low', 'high']}], nextCursor: null}});
   if (request.method === 'thread/start' || request.method === 'thread/resume') send({id: request.id, result: {thread: {id: 'fixture-thread'}}});
   if (request.method === 'turn/start') {
-    record({codexEffort: request.params.effort ?? null});
+    record({codexEffort: request.params.effort ?? null, codexPrompt: request.params.input?.[0]?.text ?? null});
     send({id: request.id, result: {turn: {id: 'fixture-turn'}}});
     setTimeout(() => {
       send({method: 'item/agentMessage/delta', params: {threadId: 'fixture-thread', turnId: 'fixture-turn', itemId: 'message', delta: 'Headless Codex completed'}});
@@ -71,6 +71,11 @@ readline.createInterface({input: process.stdin}).on('line', line => {
     send({type: 'control_response', response: {subtype: 'success', request_id: request.request_id}});
   }
   if (request.type === 'control_request' && request.request.subtype === 'list_models') send({type: 'control_response', response: {subtype: 'success', request_id: request.request_id, response: {models: [{value: 'claude-fixture-model', resolvedModel: 'claude-fixture-model', displayName: 'Fixture Claude'}]}}});
+  if (request.type === 'user') {
+    const content = request.message?.content;
+    const prompt = typeof content === 'string' ? content : (content ?? []).filter(block => block.type === 'text').map(block => block.text).join('\\n');
+    record({claudePrompt: prompt, args: process.argv.slice(2)});
+  }
   if (request.type === 'user') setTimeout(() => {
     send({type: 'assistant', session_id: 'fixture-claude', message: {content: [{type: 'text', text: 'Headless Claude completed'}]}});
     send({type: 'result', subtype: 'success', session_id: 'fixture-claude'});
@@ -322,11 +327,14 @@ describe("existing providers over headless process I/O", () => {
             runtimeMode: "supervised",
           });
         writeFileSync(log, "");
+        // Title helpers run through the same fake binary and can log late,
+        // so each turn sends its own prompt and reads only that record.
+        const prompt = `effort ${harness} turn ${turn}`;
         engine.command({
           type: "send",
           commandId: `effort-${harness}-${turn}`,
           sessionId,
-          text: "hello",
+          text: prompt,
         });
         await vi.waitFor(
           () => expect(store.session(sessionId).status).toBe("idle"),
@@ -337,11 +345,13 @@ describe("existing providers over headless process I/O", () => {
           .split("\n")
           .map((line) => JSON.parse(line));
         if (harness === "codex")
-          efforts.push(calls.find((call) => "codexEffort" in call).codexEffort);
+          efforts.push(
+            calls.find((call) => call.codexPrompt === prompt).codexEffort,
+          );
         else {
           const args: string[] = calls.find(
-            (call) => call.claudeArgs,
-          ).claudeArgs;
+            (call) => call.claudePrompt === prompt,
+          ).args;
           efforts.push(args[args.indexOf("--effort") + 1] ?? null);
         }
       }

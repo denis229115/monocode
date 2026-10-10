@@ -7,10 +7,13 @@ import { newEditorPane, newFileTab } from "../../workspace/model/layout";
 import { invalidateWatchedFiles } from "../model/fileWatch";
 import { FilePane } from "./FilePane";
 
-const disk = vi.hoisted(() => ({ content: "" }));
+const disk = vi.hoisted(() => ({ content: "", reads: 0 }));
 const invoke = vi.hoisted(() =>
   vi.fn(async (command: string) => {
-    if (command === "read_text_file") return disk.content;
+    if (command === "read_text_file") {
+      disk.reads++;
+      return disk.content;
+    }
     if (command === "git_diff_files")
       return {
         files: [{ relative: "review.txt", staged: false, unstaged: true }],
@@ -31,7 +34,11 @@ vi.mock("@tauri-apps/api/core", async (original) => ({
   invoke,
 }));
 
-describe("file pane source navigation", () => {
+// A ceiling, not a delay: each wait returns once its condition holds. The
+// editor loads lazily, which can take seconds on a busy machine.
+const UNDER_LOAD = { timeout: 10_000 };
+
+describe("file pane source navigation", { timeout: 30_000 }, () => {
   let root: Root;
   let container: HTMLDivElement;
   let paneProps: ComponentProps<typeof FilePane>;
@@ -85,7 +92,7 @@ describe("file pane source navigation", () => {
         await vi.dynamicImportSettled();
       });
       expect(container.querySelector(".cm-editor")).not.toBeNull();
-    });
+    }, UNDER_LOAD);
     return EditorView.findFromDOM(
       container.querySelector<HTMLElement>(".cm-editor")!,
     )!;
@@ -94,8 +101,14 @@ describe("file pane source navigation", () => {
   async function reload(path: string, view: EditorView, content: string) {
     disk.content = content;
     await act(async () => {
+      const reads = disk.reads;
       invalidateWatchedFiles([path]);
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      // The editor rereads after a short debounce; the new document
+      // commits when this act scope ends.
+      await vi.waitFor(
+        () => expect(disk.reads).toBeGreaterThan(reads),
+        UNDER_LOAD,
+      );
     });
     expect(view.state.doc.toString()).toBe(content);
     await act(async () => {
@@ -109,7 +122,10 @@ describe("file pane source navigation", () => {
   it("shows Markdown source and navigates to its referenced line", async () => {
     const view = await render("/repo/navigation.md", 2);
     await act(async () =>
-      vi.waitFor(() => expect(view.state.selection.main.head).toBe(12)),
+      vi.waitFor(
+        () => expect(view.state.selection.main.head).toBe(12),
+        UNDER_LOAD,
+      ),
     );
     expect(
       container.querySelector(
@@ -129,10 +145,12 @@ describe("file pane source navigation", () => {
   it("clamps a stale source location to the last line instead of waiting forever", async () => {
     const view = await render("/repo/short.txt", 999);
     await act(async () =>
-      vi.waitFor(() =>
-        expect(
-          view.state.doc.lineAt(view.state.selection.main.head).number,
-        ).toBe(3),
+      vi.waitFor(
+        () =>
+          expect(
+            view.state.doc.lineAt(view.state.selection.main.head).number,
+          ).toBe(3),
+        UNDER_LOAD,
       ),
     );
   });
@@ -146,12 +164,16 @@ describe("file pane source navigation", () => {
       vi.waitFor(() => {
         expect(view.state.doc.lines).toBe(1);
         expect(view.state.selection.main.head).toBe(1);
-      }),
+      }, UNDER_LOAD),
     );
     await act(async () => {
+      const reads = disk.reads;
       disk.content = "first line\nsecond line\nthird line";
       invalidateWatchedFiles(["/repo/growing.txt"]);
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await vi.waitFor(
+        () => expect(disk.reads).toBeGreaterThan(reads),
+        UNDER_LOAD,
+      );
     });
     await act(async () =>
       vi.waitFor(() => {
@@ -162,7 +184,7 @@ describe("file pane source navigation", () => {
         expect(view.state.selection.main.head).toBe(
           view.state.doc.line(3).from + 1,
         );
-      }),
+      }, UNDER_LOAD),
     );
   });
 
@@ -173,7 +195,7 @@ describe("file pane source navigation", () => {
       vi.waitFor(() => {
         expect(container.textContent).toContain("+1");
         expect(container.textContent).toContain("-1");
-      }),
+      }, UNDER_LOAD),
     );
   });
 
@@ -181,7 +203,10 @@ describe("file pane source navigation", () => {
     const path = "/repo/moved.txt";
     const view = await render(path, 2);
     await act(async () =>
-      vi.waitFor(() => expect(view.state.selection.main.head).toBe(12)),
+      vi.waitFor(
+        () => expect(view.state.selection.main.head).toBe(12),
+        UNDER_LOAD,
+      ),
     );
     const anchor = view.state.doc.line(3).from;
     const button = document.createElement("button");
@@ -203,7 +228,10 @@ describe("file pane source navigation", () => {
     const path = "/repo/completed.txt";
     const view = await render(path, 2);
     await act(async () =>
-      vi.waitFor(() => expect(view.state.selection.main.head).toBe(12)),
+      vi.waitFor(
+        () => expect(view.state.selection.main.head).toBe(12),
+        UNDER_LOAD,
+      ),
     );
     const focus = vi.spyOn(view, "focus");
 
@@ -224,7 +252,7 @@ describe("file pane source navigation", () => {
         vi.waitFor(() => {
           expect(view.state.doc.lines).toBe(1);
           expect(view.state.selection.main.head).toBe(1);
-        }),
+        }, UNDER_LOAD),
       );
       const button = document.createElement("button");
       container.append(button);
@@ -252,7 +280,10 @@ describe("file pane source navigation", () => {
     const path = "/repo/revisit.txt";
     const view = await render(path, 2);
     await act(async () =>
-      vi.waitFor(() => expect(view.state.selection.main.head).toBe(12)),
+      vi.waitFor(
+        () => expect(view.state.selection.main.head).toBe(12),
+        UNDER_LOAD,
+      ),
     );
     await act(async () => view.dispatch({ selection: { anchor: 0 } }));
     await act(async () =>
@@ -264,7 +295,10 @@ describe("file pane source navigation", () => {
       ),
     );
     await act(async () =>
-      vi.waitFor(() => expect(view.state.selection.main.head).toBe(12)),
+      vi.waitFor(
+        () => expect(view.state.selection.main.head).toBe(12),
+        UNDER_LOAD,
+      ),
     );
   });
 });
