@@ -47,6 +47,12 @@ import {
   type MonoCard,
 } from "../../monos/model/monoCards";
 import {
+  DECISION_FIELDS,
+  parseDecisionQuestions,
+  sameDecisionQuestions,
+  type DecisionCard,
+} from "../../sessions/model/decisionCard";
+import {
   HABITS_MAX,
   checkHabitsNow,
   habitRunningSince,
@@ -144,6 +150,14 @@ export type AgentAppHost = {
   isHabitRun?(sessionId: string): boolean;
   /** Puts a card in the Mono's chat, or holds it for a habit run's report. */
   postCard?(sourceSessionId: string, card: MonoCard): void;
+  /**
+   * Leaves a decision card under the asking turn, or returns the card this
+   * request ID already left anywhere in the session's history.
+   */
+  askDecision?(
+    sourceSessionId: string,
+    card: Omit<DecisionCard, "turnId" | "outcome">,
+  ): DecisionCard | Promise<DecisionCard>;
   habits?: {
     load(monoId: string): Promise<Habit[]>;
     update<T>(
@@ -219,6 +233,7 @@ const FIELDS = new Map<string, readonly string[]>([
   ["habits.run", ["id"]],
   ["habits.remove", ["id"]],
   ["chat.card", [...CARD_FIELDS]],
+  ["chat.ask", [...DECISION_FIELDS]],
 ]);
 
 function fields(action: string, input: Record<string, unknown>) {
@@ -963,6 +978,28 @@ export async function handleAgentApp(
       note: host.isMono(source.id)
         ? "It shows in the chat where you are in your reply."
         : "It goes out with your report, after its text; if you stay quiet, it is dropped.",
+    };
+  }
+  if (action === "chat.ask") {
+    if (host.isHabitRun?.(source.id))
+      throw new Error("A habit run cannot ask the user; say it in its report");
+    if (!host.askDecision) throw new Error("Decision cards are unavailable");
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId))
+      throw new Error("Invalid request ID");
+    const card = {
+      id: requestId,
+      questions: parseDecisionQuestions(input.questions),
+      askedAt: (host.now?.() ?? new Date()).getTime(),
+    };
+    const stored = await host.askDecision(source.id, card);
+    if (!sameDecisionQuestions(stored.questions, card.questions))
+      throw new Error("Request ID was already used for another card");
+    return {
+      cardId: stored.id,
+      status: stored.outcome?.kind ?? "waiting",
+      note: stored.outcome
+        ? "The user already settled this card."
+        : "The card waits in this chat. End your turn now; the user's answer arrives later as your next message.",
     };
   }
   switch (action) {

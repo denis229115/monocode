@@ -522,6 +522,11 @@ export type Session = {
    * In-memory; request ids do not survive restarts.
    */
   pendingQuestion?: UserQuestionPrompt;
+  /**
+   * Decision cards the agent left: every waiting one and the latest settled.
+   * Saved apart from the transcript; see `decisionCard`.
+   */
+  decisionCards?: import("./decisionCard").DecisionCard[];
 };
 
 export type PendingHarnessSwitch = {

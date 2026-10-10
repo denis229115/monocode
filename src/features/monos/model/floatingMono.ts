@@ -29,6 +29,7 @@ export type FloatingMonoAction =
   | { kind: "approval"; requestId: number; decision: ApprovalDecision }
   | { kind: "question"; requestId: number; reply: UserQuestionReply }
   | { kind: "questionInteraction"; requestId: number }
+  | { kind: "decision"; cardId: string; reply: UserQuestionReply }
   | { kind: "reveal" }
   | { kind: "openFile"; path: string }
   | { kind: "openArtifact"; id: string }
@@ -107,6 +108,7 @@ export type FloatingMonoHost = {
     reply: UserQuestionReply,
   ): void;
   questionInteraction(sessionId: string, requestId: number): void;
+  decision(sessionId: string, cardId: string, reply: UserQuestionReply): void;
   reveal(monoId: string): Promise<void>;
   openFile(path: string): void | Promise<void>;
   openArtifact?(monoId: string, id: string): void | Promise<void>;
@@ -145,6 +147,9 @@ export async function deliverFloatingMonoRequest(
       break;
     case "questionInteraction":
       host.questionInteraction(session.id, action.requestId);
+      break;
+    case "decision":
+      host.decision(session.id, action.cardId, action.reply);
       break;
     case "reveal":
       await host.reveal(request.monoId);

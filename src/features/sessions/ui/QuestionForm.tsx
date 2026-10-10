@@ -4,25 +4,39 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
 } from "react";
-import { Check, MessageSquare } from "../../../shared/ui/icons";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { Check, ExternalLink, MessageSquare } from "../../../shared/ui/icons";
 import {
   CUSTOM_OPTION_ID,
   buildQuestionReply,
-  isOtherOption,
+  isTypedAnswerOption,
   questionIsComplete,
   type UserQuestion,
   type UserQuestionPrompt,
   type UserQuestionReply,
 } from "../model/userQuestion";
+import { parseStandaloneHttpUrl } from "../model/linkPreview";
+import { UserLinkPreview } from "./UserLinkPreview";
 
 type Props = {
   prompt: UserQuestionPrompt;
   onReply: (requestId: number, reply: UserQuestionReply) => void;
   onInteraction?: (requestId: number) => void;
+  /** Controls for moving between several waiting cards, beside Skip. */
+  pager?: ReactNode;
+  /** The project a GitHub link resolves against. */
+  cwd?: string;
 };
 
-export function QuestionForm({ prompt, onReply, onInteraction }: Props) {
+export function QuestionForm({
+  prompt,
+  onReply,
+  onInteraction,
+  pager,
+  cwd,
+}: Props) {
   const [step, setStep] = useState(0);
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
   const [custom, setCustom] = useState<Record<string, string>>({});
@@ -124,6 +138,7 @@ export function QuestionForm({ prompt, onReply, onInteraction }: Props) {
               {index + 1} of {total}
             </span>
           ) : null}
+          {pager}
           <button
             type="button"
             className="h-6 shrink-0 rounded-md px-1.5 text-[11px] text-content/55 hover:bg-content/10 hover:text-content"
@@ -136,6 +151,7 @@ export function QuestionForm({ prompt, onReply, onInteraction }: Props) {
           <QuestionFields
             key={question.id}
             question={question}
+            cwd={cwd}
             selected={answers[question.id] ?? []}
             custom={custom[question.id] ?? ""}
             onSelect={(optionId) =>
@@ -204,12 +220,14 @@ export function QuestionForm({ prompt, onReply, onInteraction }: Props) {
 
 function QuestionFields({
   question,
+  cwd,
   selected,
   custom,
   onSelect,
   onCustom,
 }: {
   question: UserQuestion;
+  cwd?: string;
   selected: string[];
   custom: string;
   onSelect: (optionId: string) => void;
@@ -275,6 +293,37 @@ function QuestionFields({
       {question.multiSelect ? (
         <p className="mt-0.5 text-[11px] text-content/40">Select all that apply</p>
       ) : null}
+      {question.links?.length ? (
+        <div className="mt-1.5 flex flex-wrap gap-1.5" data-question-links>
+          {question.links.flatMap((url) => {
+            const link = parseStandaloneHttpUrl(url);
+            if (!link) return [];
+            // A PR or issue shows as its GitHub card; other links as a chip.
+            if (link.githubWorkItem)
+              return [
+                <UserLinkPreview key={url} link={link} cwd={cwd} compact />,
+              ];
+            return [
+              <a
+                key={url}
+                href={link.url}
+                data-question-link
+                title={link.url}
+                className="inline-flex h-[18px] max-w-60 items-center gap-1 rounded-[6px] bg-content/8 px-1.5 text-xs leading-4 text-content/70 no-underline hover:text-content focus-visible:outline-2 focus-visible:outline-accent"
+                onClick={(event) => {
+                  event.preventDefault();
+                  void openUrl(link.url).catch((error) =>
+                    console.error("Failed to open web link:", error),
+                  );
+                }}
+              >
+                <ExternalLink className="size-3 shrink-0" />
+                <span className="truncate">{link.displayUrl}</span>
+              </a>,
+            ];
+          })}
+        </div>
+      ) : null}
       {options.length === 0 && question.allowCustom ? (
         <input
           value={custom}
@@ -288,8 +337,7 @@ function QuestionFields({
           role="group"
         >
           {options.map((option, optionIndex) => {
-            const isCustom =
-              isOtherOption(option) || option.id === CUSTOM_OPTION_ID;
+            const isCustom = isTypedAnswerOption(question, option);
             const active = selected.includes(option.id);
             return (
               <div key={option.id}>
@@ -335,6 +383,11 @@ function QuestionFields({
                   <span className="min-w-0 flex-1">
                     <span className="block text-[12px] leading-snug text-content">
                       {option.label}
+                      {option.recommended ? (
+                        <span className="ml-1.5 rounded-full bg-accent/15 px-1.5 py-px align-[1px] text-[10px] text-accent">
+                          Recommended
+                        </span>
+                      ) : null}
                     </span>
                     {option.description ? (
                       <span className="mt-0.5 block text-[11px] leading-snug text-content/50">
@@ -366,14 +419,20 @@ function QuestionFields({
 
 function displayOptions(question: UserQuestion): UserQuestion["options"] {
   if (question.options.length === 0) return question.options;
-  if (question.options.some(isOtherOption) || !question.allowCustom) {
+  if (
+    question.options.some((option) => isTypedAnswerOption(question, option)) ||
+    !question.allowCustom
+  ) {
     return question.options;
   }
   return [...question.options, { id: CUSTOM_OPTION_ID, label: "Other" }];
 }
 
 function customOptionId(question: UserQuestion): string {
-  return question.options.find(isOtherOption)?.id ?? CUSTOM_OPTION_ID;
+  return (
+    question.options.find((option) => isTypedAnswerOption(question, option))
+      ?.id ?? CUSTOM_OPTION_ID
+  );
 }
 
 function isCustomId(question: UserQuestion, optionId: string): boolean {

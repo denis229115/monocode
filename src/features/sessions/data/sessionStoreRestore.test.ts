@@ -69,6 +69,27 @@ describe("restoring a session whose repair cannot be persisted", () => {
     ]);
   });
 
+  it("brings back the session's decision cards, whichever turn asked them", async () => {
+    const record = codexRecord();
+    const waiting = {
+      id: "ask-old",
+      // A turn no longer in the loaded transcript.
+      turnId: "turn-from-last-month",
+      askedAt: 1,
+      questions: [
+        { id: "q1", prompt: "Merge?", multiSelect: false, allowCustom: true, exactOptions: true, options: [] },
+      ],
+    };
+    record.decisionCards = [
+      waiting,
+      { ...waiting, id: "broken", questions: [{ id: "constructor", prompt: "Q?" }] },
+    ];
+    invoke.mockImplementation((cmd: string) =>
+      Promise.resolve(cmd === "session_get" ? record : null),
+    );
+    expect((await getSession("s1"))?.decisionCards).toEqual([waiting]);
+  });
+
   it("still returns the repaired session when the write fails", async () => {
     invoke.mockImplementation((cmd: string) => {
       if (cmd === "session_get") return Promise.resolve(codexRecord());
