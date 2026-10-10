@@ -5,6 +5,7 @@ import { isFilesystemTab, type FilePaneTab } from "../../workspace/model/layout"
 import { isEqualOrInside, pathKey } from "../../../shared/lib/paths";
 import { isBlankSession } from "../../projects/model/projectReturn";
 import { newSession, sessionWorkCwd, type Session } from "../../sessions/model/session";
+import { refreshSavedWaitingDecisions } from "../../sessions/data/decisionCards";
 
 export type Worktree = {
   path: string;
@@ -99,6 +100,8 @@ export async function removeWorktree(
     { cwd, path, force, keepSessions },
   );
   notifyGitChanged();
+  // Its chats no longer wait on their saved cards.
+  void refreshSavedWaitingDecisions();
   return result;
 }
 
@@ -111,6 +114,8 @@ export async function removeOrchestrationWorktree(
     { cwd, path },
   );
   notifyGitChanged();
+  // Its chats no longer wait on their saved cards.
+  void refreshSavedWaitingDecisions();
   return result;
 }
 

@@ -63,6 +63,7 @@ describe("session persistence concurrency", () => {
       "session_upsert",
       "session_upsert",
       "session_delete",
+      "decision_card_waiting_sessions",
     ]);
     await upsertSession(worker);
     for (const [, args] of mocks.invoke.mock.calls
@@ -100,7 +101,11 @@ describe("session persistence concurrency", () => {
     });
     await Promise.all([writing, lateWrite, deleting]);
 
-    expect(commands).toEqual(["session_upsert", "session_delete"]);
+    expect(commands).toEqual([
+      "session_upsert",
+      "session_delete",
+      "decision_card_waiting_sessions",
+    ]);
   });
 
   it("discards a draft-only record before reusing its open session id", async () => {

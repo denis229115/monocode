@@ -423,11 +423,22 @@ export const MONO_STATUS_LABEL: Record<MonoStatus, string> = {
   idle: "Idle",
 };
 
+/** A Mono whose chat is not loaded, known only by a saved card still waiting. */
+export const MONO_WAITING_CARD_STATE: MonoState = {
+  status: "needs-you",
+  activity: "Waiting for your answer",
+};
+
 /** The agent's state, with the step it is on or the call it is waiting for. */
 export function monoState(
   session: Pick<
     Session,
-    "blocks" | "busy" | "pendingQuestion" | "worktreeRemoved" | "usageLimit"
+    | "blocks"
+    | "busy"
+    | "pendingQuestion"
+    | "decisionCards"
+    | "worktreeRemoved"
+    | "usageLimit"
   >,
 ): MonoState {
   const { blocks, pendingQuestion: question } = session;
@@ -447,6 +458,16 @@ export function monoState(
       activity: approval?.tool?.title
         ? `Approve ${plainLine(approval.tool.title)}`
         : "Waiting for approval",
+    };
+  }
+  const card = session.worktreeRemoved
+    ? undefined
+    : session.decisionCards?.find((entry) => !entry.outcome);
+  if (card) {
+    const first = card.questions[0];
+    return {
+      status: "needs-you",
+      activity: first?.header?.trim() || first?.prompt.trim(),
     };
   }
   if (!session.worktreeRemoved && session.usageLimit) {

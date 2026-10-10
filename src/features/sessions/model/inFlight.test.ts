@@ -24,6 +24,30 @@ function chat(
 }
 
 describe("isInFlightSession", () => {
+  it("is false for a chat holding only a waiting decision card", () => {
+    const waiting = chat("/tmp/a", {
+      decisionCards: [
+        {
+          id: "ask",
+          turnId: "u1",
+          askedAt: 1,
+          questions: [
+            {
+              id: "q1",
+              prompt: "Merge now?",
+              multiSelect: false,
+              allowCustom: true,
+              exactOptions: true,
+              options: [],
+            },
+          ],
+        },
+      ],
+    });
+    expect(isInFlightSession(waiting)).toBe(false);
+    expect(hasInFlightSessions([waiting])).toBe(false);
+  });
+
   it("is true for a busy turn, a live approval, or a parked question", () => {
     expect(isInFlightSession(chat("/tmp/a"))).toBe(false);
     expect(isInFlightSession(chat("/tmp/a", { busy: true }))).toBe(true);

@@ -436,6 +436,7 @@ import {
   HARNESS_TITLE,
   canReplaceSessionTitle,
   formatSessionTitle,
+  needsInputSessionIds,
   sessionNeedsInput,
   newDefaultSession,
   newSession,
@@ -547,6 +548,7 @@ import {
   createMono,
   findMono,
   isMonoSession,
+  MONO_WAITING_CARD_STATE,
   listMonos,
   monoForSession,
   monoLook,
@@ -625,7 +627,10 @@ import { decisionAnswerer } from "../features/sessions/model/decisionAnswers";
 import {
   askDecisionCard,
   claimDecisionCard,
+  refreshSavedWaitingDecisions,
   releaseDecisionCard,
+  savedWaitingDecisions,
+  subscribeSavedWaitingDecisions,
 } from "../features/sessions/data/decisionCards";
 import {
   MonoChangesPanel,
@@ -2045,16 +2050,20 @@ function Workspace({
     return !!focused && ids.has(focused.id);
   }, [activeTab, currentProjectDock, runningTerminals]);
 
-  const nextApprovalSessionIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const session of sessions) {
-      if (sessionNeedsInput(session)) {
-        ids.add(session.id);
-        if (session.orchestrationLeadId) ids.add(session.orchestrationLeadId);
-      }
-    }
-    return ids;
-  }, [sessions]);
+  // Saved cards still waiting, for chats this window has not loaded. Once a
+  // chat loads, its own cards answer for it.
+  const savedWaiting = useSyncExternalStore(
+    subscribeSavedWaitingDecisions,
+    savedWaitingDecisions,
+  );
+  useEffect(() => {
+    void refreshSavedWaitingDecisions();
+  }, []);
+
+  const nextApprovalSessionIds = useMemo(
+    () => needsInputSessionIds(sessions, savedWaiting),
+    [sessions, savedWaiting],
+  );
   const approvalSessionIdsRef = useRef(nextApprovalSessionIds);
   if (!setsEqual(approvalSessionIdsRef.current, nextApprovalSessionIds)) {
     approvalSessionIdsRef.current = nextApprovalSessionIds;
@@ -2125,7 +2134,7 @@ function Workspace({
 
   useEffect(() => {
     syncDockBadge(sessions);
-  }, [sessions]);
+  }, [sessions, savedWaiting]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -2135,6 +2144,8 @@ function Workspace({
         if (focused) {
           flushForegroundHarnessEvents();
           syncDockBadge(sessionsRef.current);
+          // Another window may have answered a card this one has not loaded.
+          void refreshSavedWaitingDecisions();
           if (
             document.activeElement === document.body &&
             !projectTerminalFocusedRef.current &&
@@ -12517,12 +12528,14 @@ function Workspace({
         ? sessions.find((entry) => entry.id === mono.sessionId)
         : undefined;
       if (session) states.set(mono.id, monoState(session));
+      else if (mono.sessionId && savedWaiting.has(mono.sessionId))
+        states.set(mono.id, MONO_WAITING_CARD_STATE);
       if (mono.sessionId && unseenFinishedIds.has(mono.sessionId))
         unseen.add(mono.id);
     }
     return { states, unseen };
     // The roster is read through its snapshot.
-  }, [monosSnap, sessions, unseenFinishedIds]);
+  }, [monosSnap, sessions, savedWaiting, unseenFinishedIds]);
 
   const chromeSurfaceOpen =
     searchViewOpen ||
