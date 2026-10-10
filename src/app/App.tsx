@@ -10112,11 +10112,20 @@ function Workspace({
    * Sends a decision card's answers as the agent's next message, after any
    * running turn, and settles the card once the message is accepted.
    */
+  const answeringDecisions = useRef(new Set<string>());
   const onDecisionAnswer = useCallback(
     (sessionId: string, cardId: string, reply: UserQuestionReply) => {
       const session = sessionsRef.current.find((s) => s.id === sessionId);
       const card = session && findDecisionCard(session.blocks, cardId);
-      if (!session || !card || card.outcome || session.worktreeRemoved) return;
+      const key = `${sessionId}:${cardId}`;
+      if (
+        !session ||
+        !card ||
+        card.outcome ||
+        session.worktreeRemoved ||
+        answeringDecisions.current.has(key)
+      )
+        return;
       const settle = (outcome: NonNullable<DecisionCard["outcome"]>) =>
         setSessions((prev) =>
           prev.map((s) =>
@@ -10127,6 +10136,8 @@ function Workspace({
         settle({ kind: "dismissed", at: Date.now() });
         return;
       }
+      // A second click while the first answer is being accepted sends nothing.
+      answeringDecisions.current.add(key);
       void Promise.resolve(
         submitSessionRef.current(
           sessionId,
@@ -10134,9 +10145,11 @@ function Workspace({
           [],
           { followUpBehavior: "queue" },
         ),
-      ).then((accepted) => {
-        if (accepted) settle({ kind: "answered", at: Date.now(), reply });
-      });
+      )
+        .then((accepted) => {
+          if (accepted) settle({ kind: "answered", at: Date.now(), reply });
+        })
+        .finally(() => answeringDecisions.current.delete(key));
     },
     [],
   );
