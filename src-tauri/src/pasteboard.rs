@@ -444,10 +444,22 @@ mod tests {
     use objc2_app_kit::{NSPasteboard, NSPasteboardTypeFileURL, NSPasteboardTypeString};
     use objc2_foundation::{NSString, NSURL};
     use std::path::Path;
+    use std::sync::{Mutex, MutexGuard};
+
+    /// A private pasteboard once returned another test's item while these ran
+    /// on parallel threads, so they take turns.
+    static PASTEBOARD_TURN: Mutex<()> = Mutex::new(());
+
+    fn private_pasteboard() -> (MutexGuard<'static, ()>, objc2::rc::Retained<NSPasteboard>) {
+        let turn = PASTEBOARD_TURN
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        (turn, NSPasteboard::pasteboardWithUniqueName())
+    }
 
     #[test]
     fn reads_file_urls_from_a_private_pasteboard() {
-        let pb = NSPasteboard::pasteboardWithUniqueName();
+        let (_turn, pb) = private_pasteboard();
         pb.clearContents();
         let ok = pb.setString_forType(
             &NSString::from_str("file:///tmp/finder%20copy.txt"),
@@ -483,7 +495,7 @@ mod tests {
         let reference = url.fileReferenceURL().unwrap();
         assert!(reference.isFileReferenceURL());
 
-        let pb = NSPasteboard::pasteboardWithUniqueName();
+        let (_turn, pb) = private_pasteboard();
         pb.clearContents();
         assert!(
             pb.setString_forType(&reference.absoluteString().unwrap(), unsafe {
@@ -499,7 +511,7 @@ mod tests {
 
     #[test]
     fn ignores_file_urls_with_non_local_hosts() {
-        let pb = NSPasteboard::pasteboardWithUniqueName();
+        let (_turn, pb) = private_pasteboard();
         for url in [
             "file://server.example/tmp/a.png",
             r"file://localhost\@server.example/tmp/a.png",
@@ -511,13 +523,14 @@ mod tests {
             assert!(
                 pb.setString_forType(&NSString::from_str(url), unsafe { NSPasteboardTypeFileURL })
             );
-            assert!(file_paths_from(&pb).is_empty(), "accepted {url}");
+            let paths = file_paths_from(&pb);
+            assert!(paths.is_empty(), "accepted {url} as {paths:?}");
         }
     }
 
     #[test]
     fn accepts_file_urls_with_a_localhost_host() {
-        let pb = NSPasteboard::pasteboardWithUniqueName();
+        let (_turn, pb) = private_pasteboard();
         pb.clearContents();
         assert!(pb.setString_forType(
             &NSString::from_str("file://localhost/tmp/finder%20copy.txt"),
@@ -531,7 +544,7 @@ mod tests {
 
     #[test]
     fn ignores_pasteboards_without_file_urls() {
-        let pb = NSPasteboard::pasteboardWithUniqueName();
+        let (_turn, pb) = private_pasteboard();
         pb.clearContents();
         pb.setString_forType(&NSString::from_str("hello"), unsafe {
             NSPasteboardTypeString
@@ -541,7 +554,7 @@ mod tests {
 
     #[test]
     fn ignores_non_file_urls_in_file_url_items() {
-        let pb = NSPasteboard::pasteboardWithUniqueName();
+        let (_turn, pb) = private_pasteboard();
         pb.clearContents();
         pb.setString_forType(
             &NSString::from_str("https://example.com/image.png"),
@@ -552,7 +565,7 @@ mod tests {
 
     #[test]
     fn writes_original_file_url_to_a_private_pasteboard() {
-        let pb = NSPasteboard::pasteboardWithUniqueName();
+        let (_turn, pb) = private_pasteboard();
         write_file_to(&pb, Path::new("/tmp/original image.png")).unwrap();
         assert_eq!(
             file_paths_from(&pb),
