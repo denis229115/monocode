@@ -52,20 +52,78 @@ describe("saved waiting cards", () => {
     expect(changed).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps the latest read when an older one lands late, and the last list on failure", async () => {
+  it("shares one more read among calls made during a read, and keeps the last list on failure", async () => {
     const store = await load();
     let first!: (rows: Row[]) => void;
     mocks.invoke
       .mockImplementationOnce(() => new Promise<Row[]>((resolve) => (first = resolve)))
       .mockResolvedValueOnce([{ sessionId: "new" }])
       .mockRejectedValueOnce(new Error("locked"));
-    const older = store.refreshSavedWaitingDecisions();
-    await store.refreshSavedWaitingDecisions();
+    // A bulk delete: many refreshes while the first read is out.
+    const calls = [1, 2, 3, 4].map(() => store.refreshSavedWaitingDecisions());
     first([{ sessionId: "old" }]);
-    await older;
+    await Promise.all(calls);
+    expect(mocks.invoke).toHaveBeenCalledTimes(2);
     expect([...store.savedWaitingDecisions().keys()]).toEqual(["new"]);
     await store.refreshSavedWaitingDecisions();
     expect([...store.savedWaitingDecisions().keys()]).toEqual(["new"]);
+  });
+
+  it("forgets a card dismissed here, so archiving the chat brings no mark back", async () => {
+    const state = storage([{ sessionId: "chat" }]);
+    const store = await load();
+    await store.refreshSavedWaitingDecisions();
+    // The chat opens and its card is dismissed in this window.
+    mocks.invoke.mockImplementationOnce(async () => {
+      state.waiting = [];
+      return { card: null, claimed: true };
+    });
+    await store.claimDecisionCard("chat", "a", { kind: "dismissed", at: 2 });
+    await vi.waitFor(() => expect(store.savedWaitingDecisions().size).toBe(0));
+    // Archived, the chat is no longer loaded: only the saved list speaks.
+    const { needsInputCount, needsInputSessionIds } = await import(
+      "../model/session"
+    );
+    expect(needsInputSessionIds([], store.savedWaitingDecisions())).toEqual(new Set());
+    expect(needsInputCount([], store.savedWaitingDecisions())).toBe(0);
+  });
+
+  it("lists a card asked here, and again one whose answer is given back", async () => {
+    const state = storage([]);
+    const store = await load();
+    const card = {
+      id: "a",
+      turnId: "t",
+      askedAt: 1,
+      questions: [
+        {
+          id: "q1",
+          prompt: "Merge now?",
+          multiSelect: false,
+          allowCustom: true,
+          exactOptions: true,
+          options: [],
+        },
+      ],
+    };
+    mocks.invoke.mockImplementationOnce(async () => {
+      state.waiting = [{ sessionId: "chat" }];
+      return card;
+    });
+    await store.askDecisionCard("chat", card);
+    await vi.waitFor(() =>
+      expect([...store.savedWaitingDecisions().keys()]).toEqual(["chat"]),
+    );
+    state.waiting = [];
+    await store.refreshSavedWaitingDecisions();
+    mocks.invoke.mockImplementationOnce(async () => {
+      state.waiting = [{ sessionId: "chat" }];
+      return card;
+    });
+    await store.releaseDecisionCard("chat", "a", { kind: "dismissed", at: 2 });
+    await vi.waitFor(() =>
+      expect([...store.savedWaitingDecisions().keys()]).toEqual(["chat"]),
+    );
   });
 
   it("drops a chat whose worktree is removed after startup", async () => {

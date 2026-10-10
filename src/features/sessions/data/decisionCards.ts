@@ -14,6 +14,7 @@ export async function askDecisionCard(
     await invoke("decision_card_ask", { sessionId, card }),
   );
   if (!stored) throw new Error("The saved card could not be read");
+  void refreshSavedWaitingDecisions();
   return stored;
 }
 
@@ -27,6 +28,7 @@ export async function claimDecisionCard(
     "decision_card_claim",
     { sessionId, cardId, outcome },
   );
+  void refreshSavedWaitingDecisions();
   return { card: restoreDecisionCard(result.card), claimed: result.claimed };
 }
 
@@ -36,9 +38,11 @@ export async function releaseDecisionCard(
   cardId: string,
   outcome: DecisionOutcome,
 ): Promise<DecisionCard | undefined> {
-  return restoreDecisionCard(
+  const card = restoreDecisionCard(
     await invoke("decision_card_release", { sessionId, cardId, outcome }),
   );
+  void refreshSavedWaitingDecisions();
+  return card;
 }
 
 /**
@@ -49,7 +53,8 @@ export async function releaseDecisionCard(
 export type SavedWaitingDecisions = ReadonlyMap<string, string | undefined>;
 
 let savedWaiting: SavedWaitingDecisions = new Map();
-let reads = 0;
+let reading: Promise<void> | undefined;
+let rereading: Promise<void> | undefined;
 const listeners = new Set<() => void>();
 
 export function savedWaitingDecisions(): SavedWaitingDecisions {
@@ -70,17 +75,32 @@ function sameWaiting(a: SavedWaitingDecisions, b: SavedWaitingDecisions) {
 }
 
 /**
- * Reread the list after anything that can settle a card out of this window's
- * sight: startup, focus (another window may have answered), deleting a chat
- * and removing a worktree. The latest read wins; a failed one keeps the last.
+ * Reread the list after anything that can settle a card: this window asking,
+ * answering or dismissing one, startup, focus (another window may have
+ * answered), deleting a chat and removing a worktree. Reads run one at a
+ * time; calls during a read share one more after it, so a burst of deletes
+ * costs two reads. A failed read keeps the last list.
  */
-export async function refreshSavedWaitingDecisions(): Promise<void> {
-  const read = ++reads;
+export function refreshSavedWaitingDecisions(): Promise<void> {
+  if (!reading) {
+    reading = readSavedWaitingDecisions().finally(() => {
+      reading = undefined;
+    });
+    return reading;
+  }
+  rereading ??= reading.then(() => {
+    rereading = undefined;
+    return refreshSavedWaitingDecisions();
+  });
+  return rereading;
+}
+
+async function readSavedWaitingDecisions(): Promise<void> {
   try {
     const rows = await invoke<{ sessionId: string; leadId?: string }[]>(
       "decision_card_waiting_sessions",
     );
-    if (read !== reads || !Array.isArray(rows)) return;
+    if (!Array.isArray(rows)) return;
     const next = new Map(rows.map((row) => [row.sessionId, row.leadId]));
     if (sameWaiting(savedWaiting, next)) return;
     savedWaiting = next;
