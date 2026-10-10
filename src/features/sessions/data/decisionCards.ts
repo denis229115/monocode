@@ -41,7 +41,51 @@ export async function releaseDecisionCard(
   );
 }
 
-/** Sessions with a saved card still waiting, read once for chats not loaded. */
-export async function waitingDecisionSessions(): Promise<Set<string>> {
-  return new Set(await invoke<string[]>("decision_card_waiting_sessions"));
+/**
+ * Saved chats with a card still waiting, each with the orchestration lead it
+ * works for. Only chats this window has not loaded go by it; a loaded chat's
+ * own cards answer for it.
+ */
+export type SavedWaitingDecisions = ReadonlyMap<string, string | undefined>;
+
+let savedWaiting: SavedWaitingDecisions = new Map();
+let reads = 0;
+const listeners = new Set<() => void>();
+
+export function savedWaitingDecisions(): SavedWaitingDecisions {
+  return savedWaiting;
+}
+
+export function subscribeSavedWaitingDecisions(
+  listener: () => void,
+): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+function sameWaiting(a: SavedWaitingDecisions, b: SavedWaitingDecisions) {
+  if (a.size !== b.size) return false;
+  for (const [id, lead] of a) if (!b.has(id) || b.get(id) !== lead) return false;
+  return true;
+}
+
+/**
+ * Reread the list after anything that can settle a card out of this window's
+ * sight: startup, focus (another window may have answered), deleting a chat
+ * and removing a worktree. The latest read wins; a failed one keeps the last.
+ */
+export async function refreshSavedWaitingDecisions(): Promise<void> {
+  const read = ++reads;
+  try {
+    const rows = await invoke<{ sessionId: string; leadId?: string }[]>(
+      "decision_card_waiting_sessions",
+    );
+    if (read !== reads || !Array.isArray(rows)) return;
+    const next = new Map(rows.map((row) => [row.sessionId, row.leadId]));
+    if (sameWaiting(savedWaiting, next)) return;
+    savedWaiting = next;
+    for (const listener of listeners) listener();
+  } catch {
+    // The marks stay as last read; the next refresh tries again.
+  }
 }

@@ -627,8 +627,10 @@ import { decisionAnswerer } from "../features/sessions/model/decisionAnswers";
 import {
   askDecisionCard,
   claimDecisionCard,
+  refreshSavedWaitingDecisions,
   releaseDecisionCard,
-  waitingDecisionSessions,
+  savedWaitingDecisions,
+  subscribeSavedWaitingDecisions,
 } from "../features/sessions/data/decisionCards";
 import {
   MonoChangesPanel,
@@ -2050,35 +2052,17 @@ function Workspace({
 
   // Saved cards still waiting, for chats this window has not loaded. Once a
   // chat loads, its own cards answer for it.
-  const [savedWaitingDecisions, setSavedWaitingDecisions] = useState<
-    ReadonlySet<string>
-  >(() => new Set());
+  const savedWaiting = useSyncExternalStore(
+    subscribeSavedWaitingDecisions,
+    savedWaitingDecisions,
+  );
   useEffect(() => {
-    let cancelled = false;
-    void waitingDecisionSessions()
-      .then((ids) => {
-        if (cancelled) return;
-        for (const session of sessionsRef.current) ids.delete(session.id);
-        setSavedWaitingDecisions(ids);
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
+    void refreshSavedWaitingDecisions();
   }, []);
-  useEffect(() => {
-    setSavedWaitingDecisions((saved) => {
-      if (!saved.size || !sessions.some((session) => saved.has(session.id)))
-        return saved;
-      const next = new Set(saved);
-      for (const session of sessions) next.delete(session.id);
-      return next;
-    });
-  }, [sessions]);
 
   const nextApprovalSessionIds = useMemo(
-    () => needsInputSessionIds(sessions, savedWaitingDecisions),
-    [sessions, savedWaitingDecisions],
+    () => needsInputSessionIds(sessions, savedWaiting),
+    [sessions, savedWaiting],
   );
   const approvalSessionIdsRef = useRef(nextApprovalSessionIds);
   if (!setsEqual(approvalSessionIdsRef.current, nextApprovalSessionIds)) {
@@ -2150,7 +2134,7 @@ function Workspace({
 
   useEffect(() => {
     syncDockBadge(sessions);
-  }, [sessions]);
+  }, [sessions, savedWaiting]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -2160,6 +2144,8 @@ function Workspace({
         if (focused) {
           flushForegroundHarnessEvents();
           syncDockBadge(sessionsRef.current);
+          // Another window may have answered a card this one has not loaded.
+          void refreshSavedWaitingDecisions();
           if (
             document.activeElement === document.body &&
             !projectTerminalFocusedRef.current &&
@@ -12542,14 +12528,14 @@ function Workspace({
         ? sessions.find((entry) => entry.id === mono.sessionId)
         : undefined;
       if (session) states.set(mono.id, monoState(session));
-      else if (mono.sessionId && savedWaitingDecisions.has(mono.sessionId))
+      else if (mono.sessionId && savedWaiting.has(mono.sessionId))
         states.set(mono.id, MONO_WAITING_CARD_STATE);
       if (mono.sessionId && unseenFinishedIds.has(mono.sessionId))
         unseen.add(mono.id);
     }
     return { states, unseen };
     // The roster is read through its snapshot.
-  }, [monosSnap, sessions, savedWaitingDecisions, unseenFinishedIds]);
+  }, [monosSnap, sessions, savedWaiting, unseenFinishedIds]);
 
   const chromeSurfaceOpen =
     searchViewOpen ||

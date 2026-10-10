@@ -80,7 +80,10 @@ const loaded = [
 ];
 // A chat whose tab closed before a restart: only its saved card is known.
 const closed = chat("closed", "Closed chat with a saved card");
-const savedWaiting = new Set(["closed", "mono-saved"]);
+const savedWaiting = new Map<string, string | undefined>([
+  ["closed", undefined],
+  ["mono-saved", undefined],
+]);
 
 localStorage.clear();
 const monos = [

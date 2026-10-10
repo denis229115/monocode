@@ -46,6 +46,7 @@ import type {
 } from "../model/session";
 
 import { HARNESSES, RUNTIME_MODES } from "../model/session";
+import { refreshSavedWaitingDecisions } from "./decisionCards";
 
 import { restoreOrchestrationProposal } from "../../orchestration/model/orchestrationPlan";
 import {
@@ -767,6 +768,8 @@ export async function deleteSession(
       invoke<void>("session_delete", { sessionId, imagePaths }),
     );
     monoSavedBlocks.delete(sessionId);
+    // Its saved cards went with it.
+    void refreshSavedWaitingDecisions();
     const tombstone = setTimeout(
       () => deletedSessionIds.delete(sessionId),
       60_000,

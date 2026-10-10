@@ -750,12 +750,12 @@ export function sessionNeedsInput(session: Session): boolean {
 
 /**
  * Sessions to mark as needing input, and the orchestration leads of any that
- * are. A loaded session answers for itself; `savedWaiting` covers the rest,
- * read from storage at startup, since only their saved cards are known.
+ * are. A loaded session answers for itself; `savedWaiting` covers the rest by
+ * their saved cards, as session id to the lead it works for.
  */
 export function needsInputSessionIds(
   sessions: readonly Session[],
-  savedWaiting: ReadonlySet<string> = new Set(),
+  savedWaiting: ReadonlyMap<string, string | undefined> = new Map(),
 ): Set<string> {
   const ids = new Set<string>();
   const loaded = new Set<string>();
@@ -765,8 +765,24 @@ export function needsInputSessionIds(
     ids.add(session.id);
     if (session.orchestrationLeadId) ids.add(session.orchestrationLeadId);
   }
-  for (const id of savedWaiting) if (!loaded.has(id)) ids.add(id);
+  for (const [id, lead] of savedWaiting) {
+    if (loaded.has(id)) continue;
+    ids.add(id);
+    if (lead) ids.add(lead);
+  }
   return ids;
+}
+
+/** Chats waiting on the user, loaded or known by a saved card; leads are not
+ * counted for their workers. */
+export function needsInputCount(
+  sessions: readonly Session[],
+  savedWaiting: ReadonlyMap<string, string | undefined> = new Map(),
+): number {
+  const loaded = new Set(sessions.map((session) => session.id));
+  let count = sessions.filter(sessionNeedsInput).length;
+  for (const id of savedWaiting.keys()) if (!loaded.has(id)) count++;
+  return count;
 }
 
 /** The single unsent user turn held by a session, when present. */

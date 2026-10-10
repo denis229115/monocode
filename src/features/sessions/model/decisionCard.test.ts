@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  needsInputCount,
   needsInputSessionIds,
   newSession,
   sessionNeedsInput,
@@ -259,15 +260,38 @@ describe("a waiting card needs the user", () => {
     expect(needsInputSessionIds([worker, chat("idle")])).toEqual(
       new Set(["worker", "lead"]),
     );
-    expect(needsInputSessionIds([], new Set(["closed"]))).toEqual(
+    expect(needsInputSessionIds([], new Map([["closed", undefined]]))).toEqual(
       new Set(["closed"]),
     );
+  });
+
+  it("marks the lead of a worker known only by its saved card", () => {
+    expect(
+      needsInputSessionIds([chat("lead")], new Map([["worker", "lead"]])),
+    ).toEqual(new Set(["worker", "lead"]));
+  });
+
+  it("counts loaded and saved chats once each for the Dock, not their leads", () => {
+    const loaded = [
+      chat("open", { decisionCards: [ask] }),
+      chat("idle"),
+      chat("worker", { decisionCards: [ask], orchestrationLeadId: "lead" }),
+    ];
+    const saved = new Map<string, string | undefined>([
+      ["open", undefined],
+      ["closed", undefined],
+      ["closed-worker", "lead"],
+    ]);
+    expect(needsInputCount(loaded, saved)).toBe(4);
+    expect(needsInputCount([], saved)).toBe(3);
   });
 
   it("lets a loaded chat answer for itself over its saved card", () => {
     const settled = chat("s", {
       decisionCards: [{ ...ask, outcome: { kind: "dismissed", at: 2 } }],
     });
-    expect(needsInputSessionIds([settled], new Set(["s"]))).toEqual(new Set());
+    expect(needsInputSessionIds([settled], new Map([["s", undefined]]))).toEqual(
+      new Set(),
+    );
   });
 });
