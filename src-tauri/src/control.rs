@@ -177,13 +177,10 @@ fn request_grant(
     if namespace == "app"
         && (host.grants.contains_key(&grant.session)
             || host.workers.contains_key(&grant.session)
-            || !host
-                .active
-                .get(&grant.session)
-                .is_some_and(|turn| {
-                    turn.window == grant.window
-                        && (turn.app_allowed || EVERY_TURN_APP_ACTIONS.contains(&action))
-                }))
+            || !host.active.get(&grant.session).is_some_and(|turn| {
+                turn.window == grant.window
+                    && (turn.app_allowed || EVERY_TURN_APP_ACTIONS.contains(&action))
+            }))
     {
         return Err(APP_TURN_INACTIVE.into());
     }

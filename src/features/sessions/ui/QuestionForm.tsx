@@ -6,7 +6,8 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
-import { Check, MessageSquare } from "../../../shared/ui/icons";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { Check, ExternalLink, MessageSquare } from "../../../shared/ui/icons";
 import {
   CUSTOM_OPTION_ID,
   buildQuestionReply,
@@ -296,9 +297,30 @@ function QuestionFields({
         <div className="mt-1.5 flex flex-wrap gap-1.5" data-question-links>
           {question.links.flatMap((url) => {
             const link = parseStandaloneHttpUrl(url);
-            return link
-              ? [<UserLinkPreview key={url} link={link} cwd={cwd} compact />]
-              : [];
+            if (!link) return [];
+            // A PR or issue shows as its GitHub card; other links as a chip.
+            if (link.githubWorkItem)
+              return [
+                <UserLinkPreview key={url} link={link} cwd={cwd} compact />,
+              ];
+            return [
+              <a
+                key={url}
+                href={link.url}
+                data-question-link
+                title={link.url}
+                className="inline-flex h-[18px] max-w-60 items-center gap-1 rounded-[6px] bg-content/8 px-1.5 text-xs leading-4 text-content/70 no-underline hover:text-content focus-visible:outline-2 focus-visible:outline-accent"
+                onClick={(event) => {
+                  event.preventDefault();
+                  void openUrl(link.url).catch((error) =>
+                    console.error("Failed to open web link:", error),
+                  );
+                }}
+              >
+                <ExternalLink className="size-3 shrink-0" />
+                <span className="truncate">{link.displayUrl}</span>
+              </a>,
+            ];
           })}
         </div>
       ) : null}
