@@ -373,13 +373,14 @@ mod tests {
     fn conn() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         ensure_table(&conn).unwrap();
-        // The part of the sessions table cards read.
+        // The parts of the session tables cards read.
         conn.execute_batch(
             "CREATE TABLE sessions (
                id TEXT PRIMARY KEY,
                worktree_removed INTEGER NOT NULL DEFAULT 0,
                queued_messages_json TEXT NOT NULL DEFAULT '[]'
-             )",
+             );
+             CREATE TABLE orchestration_workers (session_id TEXT PRIMARY KEY, lead_id TEXT NOT NULL);",
         )
         .unwrap();
         conn
@@ -491,9 +492,14 @@ mod tests {
     fn an_answer_that_could_not_be_queued_waits_again() {
         let conn = conn();
         ask(&conn, "given-back", &json!({"id": "a", "turnId": "t"})).unwrap();
+        conn.execute("INSERT INTO sessions(id) VALUES ('given-back')", [])
+            .unwrap();
         let yes = json!({"kind": "answered", "at": 1});
         claim(&conn, "given-back", "a", &yes, true).unwrap();
+        // Sending, the chat no longer needs input; given back, it does again.
+        assert!(waiting_sessions(&conn).unwrap().is_empty());
         let waiting = release(&conn, "given-back", "a", &yes).unwrap().unwrap();
+        assert_eq!(waiting_sessions(&conn).unwrap().len(), 1);
         assert!(waiting.get("outcome").is_none());
         assert!(waiting.get("sending").is_none());
         assert!(!resume(&conn, "given-back", "a").unwrap());
@@ -533,8 +539,7 @@ mod tests {
     fn lists_sessions_with_a_waiting_card_while_their_worktree_stands() {
         let conn = conn();
         conn.execute_batch(
-            "CREATE TABLE orchestration_workers (session_id TEXT PRIMARY KEY, lead_id TEXT NOT NULL);
-             INSERT INTO sessions(id, worktree_removed) VALUES
+            "INSERT INTO sessions(id, worktree_removed) VALUES
                ('waiting', 0), ('settled', 0), ('removed', 0), ('both', 0), ('worker', 0);
              INSERT INTO orchestration_workers VALUES ('worker', 'lead');",
         )
