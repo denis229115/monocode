@@ -1,12 +1,21 @@
 import { invoke } from "@tauri-apps/api/core";
-import { HARNESS_TITLE, sessionDisplayTitle, type Session } from "../../sessions/model/session";
+import {
+  HARNESS_TITLE,
+  sessionDisplayTitle,
+  sessionWaitingDecisionCards,
+  type Session,
+} from "../../sessions/model/session";
+import { isMonoSession } from "../../monos/model/mono";
 import { loadSoundsEnabled, playCue } from "../../settings/model/sounds";
 import {
   allowsProjectNotification,
   type NotificationSubject,
 } from "./notificationPreferences";
 import { monoReplyText } from "../../monos/model/monoReaction";
-import { knownNotificationProject } from "./notificationProjects";
+import {
+  MONO_NOTIFICATION_PROJECT,
+  knownNotificationProject,
+} from "./notificationProjects";
 
 const KEY = "monocode.notifications";
 
@@ -108,10 +117,9 @@ export function shouldNotify({
   return permission === "granted" || permission === "prompt";
 }
 
-export type InputNotificationEvent = {
-  kind: "approval" | "question";
-  requestId: number;
-};
+export type InputNotificationEvent =
+  | { kind: "approval" | "question"; requestId: number }
+  | { kind: "decision"; cardId: string };
 export type NotificationEvent = "finished" | InputNotificationEvent;
 
 type PendingInputNotification = {
@@ -153,6 +161,12 @@ export function pendingInputNotifications(
         },
       );
     }
+    for (const card of sessionWaitingDecisionCards(session)) {
+      pending.set(JSON.stringify([session.id, "decision", card.id]), {
+        session,
+        event: { kind: "decision", cardId: card.id },
+      });
+    }
   }
   return pending;
 }
@@ -174,6 +188,16 @@ export function notificationText(
   const subtitle = sessionDisplayTitle(session.title, session.harness);
   const harness = HARNESS_TITLE[session.harness];
   if (event !== "finished") {
+    if (event.kind === "decision") {
+      const card = session.decisionCards?.find(
+        (entry) => entry.id === event.cardId,
+      );
+      return {
+        title,
+        subtitle,
+        body: clip(card?.questions[0]?.prompt || `${harness} left you a decision`),
+      };
+    }
     if (event.kind === "question") {
       const question =
         session.pendingQuestion?.requestId === event.requestId
@@ -232,7 +256,10 @@ export async function notifySession(
 ): Promise<boolean> {
   if (session.inboxAsk) return false;
   const occurredAt = Date.now();
-  const project = knownNotificationProject(session.cwd);
+  // A Mono's chat runs in the home folder, which no project claims.
+  const project = isMonoSession(session.id)
+    ? MONO_NOTIFICATION_PROJECT
+    : knownNotificationProject(session.cwd);
   if (!project) return false;
   return notifyProjectSession(session, event, sessionVisible, {
     projectId: project.id,

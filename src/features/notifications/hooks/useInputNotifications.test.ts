@@ -7,6 +7,13 @@ import {
   saveNotificationsEnabled,
   setWindowFocused,
 } from "../model/notifications";
+import { updateNotificationPreferences } from "../model/notificationPreferences";
+import { createMono, saveMonoSessionId } from "../../monos/model/mono";
+import {
+  parseDecisionQuestions,
+  withDecisionCard,
+  type DecisionCard,
+} from "../../sessions/model/decisionCard";
 import { newSession, type Session } from "../../sessions/model/session";
 import { useInputNotifications } from "./useInputNotifications";
 
@@ -44,6 +51,17 @@ function question(
   return { requestId, title, questions: [] };
 }
 
+function decision(id: string, prompt: string): DecisionCard {
+  return {
+    id,
+    turnId: "turn",
+    askedAt: 1,
+    questions: parseDecisionQuestions([{ header: "Release", question: prompt }]),
+  };
+}
+
+const dismissed = { kind: "dismissed", at: 2 } as const;
+
 function banners() {
   return invoke.mock.calls
     .filter(([command]) => command === "show_notification")
@@ -74,6 +92,9 @@ describe("input notification delivery", () => {
       getItem: (key: string) => storage.get(key) ?? null,
       setItem: (key: string, value: string) => {
         storage.set(key, value);
+      },
+      removeItem: (key: string) => {
+        storage.delete(key);
       },
     });
     invoke.mockClear();
@@ -191,6 +212,59 @@ describe("input notification delivery", () => {
       [{ ...session, blocks: [approval(3, "Disabled request")] }],
       "other",
     );
+    expect(banners()).toHaveLength(1);
+  });
+
+  it("notifies a new decision card once, by its first question", async () => {
+    const card = decision("merge", "Merge PR #12 now?");
+    session = withDecisionCard(session, card);
+    await render([session]);
+    expect(banners()).toEqual([
+      { sessionId: "first", body: "Merge PR #12 now?" },
+    ]);
+    // A retry with the same request ID puts back the stored card.
+    session = withDecisionCard(session, { ...card });
+    await render([session]);
+    // An answer that could not be sent puts the card back to waiting.
+    await render([withDecisionCard(session, { ...card, outcome: dismissed })]);
+    await render([withDecisionCard(session, card)]);
+    expect(banners()).toHaveLength(1);
+  });
+
+  it("does not notify a card that is already settled", async () => {
+    const card = decision("tag", "Tag the release?");
+    session = withDecisionCard(session, { ...card, outcome: dismissed });
+    await render([session]);
+    await render([withDecisionCard(session, card)]);
+    expect(banners()).toEqual([]);
+  });
+
+  it("does not notify the cards a chat brings with it when it loads", async () => {
+    const saved = withDecisionCard(
+      { ...session, id: "saved" },
+      decision("old", "Ship it?"),
+    );
+    await render([session, saved]);
+    await render([session, { ...saved, title: "Updated title" }]);
+    expect(banners()).toEqual([]);
+    // A new card in the loaded chat still notifies.
+    await render([session, withDecisionCard(saved, decision("new", "Tag it?"))]);
+    expect(banners()).toEqual([{ sessionId: "saved", body: "Tag it?" }]);
+  });
+
+  it("notifies a Mono's card unless Monos are muted", async () => {
+    const mono = createMono();
+    saveMonoSessionId(mono.id, "mono-chat");
+    // A Mono's chat runs in the home folder, which no project claims.
+    const chat = { ...newSession("codex", "/Users/me"), id: "mono-chat" };
+    await render([chat]);
+    await render([withDecisionCard(chat, decision("first", "Merge now?"))]);
+    expect(banners()).toEqual([
+      { sessionId: "mono-chat", body: "Merge now?" },
+    ]);
+
+    updateNotificationPreferences(["monos"], { mutedUntil: null });
+    await render([withDecisionCard(chat, decision("second", "Tag now?"))]);
     expect(banners()).toHaveLength(1);
   });
 });

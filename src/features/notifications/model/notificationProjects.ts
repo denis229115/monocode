@@ -6,8 +6,20 @@ export type NotificationProject = {
   id: string;
   name: string;
   detail: string;
-  kind: "repository" | "local" | "linear" | "jira";
+  kind: "repository" | "local" | "linear" | "jira" | "mono";
   paths: string[];
+};
+
+/**
+ * Every Mono's chat. A Mono is not tied to one project, so its banners are
+ * muted here rather than under any project it works on.
+ */
+export const MONO_NOTIFICATION_PROJECT: NotificationProject = {
+  id: "monos",
+  name: "Monos",
+  detail: "Every Mono's chat",
+  kind: "mono",
+  paths: [],
 };
 
 const CATALOG_KEY = "monocode.notificationProjects.v2";
