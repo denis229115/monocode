@@ -158,7 +158,15 @@ struct Event {
     input: Value,
 }
 
-fn request_grant(host: &Inner, namespace: &str, token: &str) -> Result<Grant, String> {
+/// App actions any session's agent may call during its turn, without /operator.
+const EVERY_TURN_APP_ACTIONS: [&str; 1] = ["chat.ask"];
+
+fn request_grant(
+    host: &Inner,
+    namespace: &str,
+    token: &str,
+    action: &str,
+) -> Result<Grant, String> {
     let grant = match namespace {
         "control" => host.grants.values().find(|grant| grant.token == token),
         "app" => host.app_grants.values().find(|grant| grant.token == token),
@@ -172,7 +180,10 @@ fn request_grant(host: &Inner, namespace: &str, token: &str) -> Result<Grant, St
             || !host
                 .active
                 .get(&grant.session)
-                .is_some_and(|turn| turn.window == grant.window && turn.app_allowed))
+                .is_some_and(|turn| {
+                    turn.window == grant.window
+                        && (turn.app_allowed || EVERY_TURN_APP_ACTIONS.contains(&action))
+                }))
     {
         return Err(APP_TURN_INACTIVE.into());
     }
@@ -238,7 +249,7 @@ fn serve(mut stream: TcpStream, app: &AppHandle, inner: &Arc<Mutex<Inner>>) {
         let (tx, rx) = mpsc::channel();
         let grant = {
             let mut host = inner.lock().map_err(|_| "Control service unavailable")?;
-            let grant = request_grant(&host, &request.namespace, &request.token)?;
+            let grant = request_grant(&host, &request.namespace, &request.token, &request.action)?;
             if host.pending.len() >= 24 {
                 return Err("Too many pending control requests".into());
             }
@@ -635,7 +646,7 @@ mod tests {
             },
         );
         assert!(matches!(
-            request_grant(&inner, "app", "app-token"),
+            request_grant(&inner, "app", "app-token", "sessions.list"),
             Err(error) if error == APP_TURN_INACTIVE
         ));
         inner.active.insert(
@@ -646,12 +657,12 @@ mod tests {
                 app_allowed: true,
             },
         );
-        assert!(request_grant(&inner, "app", "app-token").is_ok());
-        assert!(request_grant(&inner, "control", "app-token").is_err());
+        assert!(request_grant(&inner, "app", "app-token", "sessions.list").is_ok());
+        assert!(request_grant(&inner, "control", "app-token", "list").is_err());
         inner.active.get_mut("ordinary").unwrap().app_allowed = false;
-        assert!(request_grant(&inner, "app", "app-token").is_err());
+        assert!(request_grant(&inner, "app", "app-token", "sessions.list").is_err());
         inner.active.remove("ordinary");
-        assert!(request_grant(&inner, "app", "app-token").is_err());
+        assert!(request_grant(&inner, "app", "app-token", "sessions.list").is_err());
     }
     #[test]
     fn app_token_survives_normal_turns_but_only_works_when_opted_in() {
@@ -666,7 +677,7 @@ mod tests {
                 app_allowed: false,
             },
         );
-        assert!(request_grant(&inner, "app", &token).is_err());
+        assert!(request_grant(&inner, "app", &token, "sessions.list").is_err());
         assert!(inner.prepare_app_grant("ordinary", "main", "/repo"));
         assert_eq!(inner.app_grants["ordinary"].token, token);
         inner.grants.insert(
@@ -680,14 +691,39 @@ mod tests {
         );
         assert!(!inner.prepare_app_grant("ordinary", "main", "/repo"));
         inner.active.get_mut("ordinary").unwrap().app_allowed = true;
-        assert!(request_grant(&inner, "app", &token).is_err());
+        assert!(request_grant(&inner, "app", &token, "sessions.list").is_err());
         inner.grants.remove("ordinary");
         assert!(inner.prepare_app_grant("ordinary", "main", "/repo"));
         assert_eq!(inner.app_grants["ordinary"].token, token);
         inner.active.get_mut("ordinary").unwrap().app_allowed = true;
-        assert!(request_grant(&inner, "app", &token).is_ok());
+        assert!(request_grant(&inner, "app", &token, "sessions.list").is_ok());
         inner.active.remove("ordinary");
-        assert!(request_grant(&inner, "app", &token).is_err());
+        assert!(request_grant(&inner, "app", &token, "sessions.list").is_err());
+    }
+    #[test]
+    fn every_session_may_ask_a_decision_during_its_turn_but_nothing_else() {
+        let mut inner = Inner::default();
+        assert!(inner.prepare_app_grant("ordinary", "main", "/repo"));
+        let token = inner.app_grants["ordinary"].token.clone();
+        assert!(matches!(
+            request_grant(&inner, "app", &token, "chat.ask"),
+            Err(error) if error == APP_TURN_INACTIVE
+        ));
+        inner.active.insert(
+            "ordinary".into(),
+            ActiveTurn {
+                window: "main".into(),
+                cwd: "/repo".into(),
+                app_allowed: false,
+            },
+        );
+        assert!(request_grant(&inner, "app", &token, "chat.ask").is_ok());
+        for action in ["chat.card", "sessions.list", "notes.write"] {
+            assert!(request_grant(&inner, "app", &token, action).is_err());
+        }
+        // Orchestration leads and their workers stay on their own control path.
+        inner.workers.insert("ordinary".into(), "lead".into());
+        assert!(request_grant(&inner, "app", &token, "chat.ask").is_err());
     }
     #[cfg(not(windows))]
     #[test]

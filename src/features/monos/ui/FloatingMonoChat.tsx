@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -12,6 +12,8 @@ import { artifactLabel } from "../../artifacts/artifacts";
 import { PixelMascot } from "../../projects/ui/PixelMascot";
 import { AgentTranscript } from "../../sessions/ui/AgentTranscript";
 import { QuestionForm } from "../../sessions/ui/QuestionForm";
+import { DecisionCardPanel } from "../../sessions/ui/DecisionCards";
+import { waitingDecisionCards } from "../../sessions/model/decisionCard";
 import { revokeAttachment } from "../../sessions/model/attachments";
 import { useMonoTranscript } from "../hooks/useMonoTranscript";
 import { monoState } from "../model/mono";
@@ -383,6 +385,10 @@ function FloatingConversation({
   onOpenArtifact: (id: string) => void;
 }) {
   const transcript = useMonoTranscript(session, true);
+  const waitingDecisions = useMemo(
+    () => waitingDecisionCards(session.blocks),
+    [session.blocks],
+  );
   return (
     <div
       className="flex min-h-0 flex-1 flex-col"
@@ -459,6 +465,15 @@ function FloatingConversation({
             }
             onInteraction={(requestId) =>
               void action({ kind: "questionInteraction", requestId })
+            }
+          />
+        </div>
+      ) : waitingDecisions.length ? (
+        <div className="max-h-[45%] shrink-0 overflow-y-auto px-2 pb-2">
+          <DecisionCardPanel
+            cards={waitingDecisions}
+            onAnswer={(cardId, reply) =>
+              void action({ kind: "decision", cardId, reply })
             }
           />
         </div>

@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
 } from "react";
 import { Check, MessageSquare } from "../../../shared/ui/icons";
 import {
@@ -15,14 +16,26 @@ import {
   type UserQuestionPrompt,
   type UserQuestionReply,
 } from "../model/userQuestion";
+import { parseStandaloneHttpUrl } from "../model/linkPreview";
+import { UserLinkPreview } from "./UserLinkPreview";
 
 type Props = {
   prompt: UserQuestionPrompt;
   onReply: (requestId: number, reply: UserQuestionReply) => void;
   onInteraction?: (requestId: number) => void;
+  /** Controls for moving between several waiting cards, beside Skip. */
+  pager?: ReactNode;
+  /** The project a GitHub link resolves against. */
+  cwd?: string;
 };
 
-export function QuestionForm({ prompt, onReply, onInteraction }: Props) {
+export function QuestionForm({
+  prompt,
+  onReply,
+  onInteraction,
+  pager,
+  cwd,
+}: Props) {
   const [step, setStep] = useState(0);
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
   const [custom, setCustom] = useState<Record<string, string>>({});
@@ -124,6 +137,7 @@ export function QuestionForm({ prompt, onReply, onInteraction }: Props) {
               {index + 1} of {total}
             </span>
           ) : null}
+          {pager}
           <button
             type="button"
             className="h-6 shrink-0 rounded-md px-1.5 text-[11px] text-content/55 hover:bg-content/10 hover:text-content"
@@ -136,6 +150,7 @@ export function QuestionForm({ prompt, onReply, onInteraction }: Props) {
           <QuestionFields
             key={question.id}
             question={question}
+            cwd={cwd}
             selected={answers[question.id] ?? []}
             custom={custom[question.id] ?? ""}
             onSelect={(optionId) =>
@@ -204,12 +219,14 @@ export function QuestionForm({ prompt, onReply, onInteraction }: Props) {
 
 function QuestionFields({
   question,
+  cwd,
   selected,
   custom,
   onSelect,
   onCustom,
 }: {
   question: UserQuestion;
+  cwd?: string;
   selected: string[];
   custom: string;
   onSelect: (optionId: string) => void;
@@ -275,6 +292,16 @@ function QuestionFields({
       {question.multiSelect ? (
         <p className="mt-0.5 text-[11px] text-content/40">Select all that apply</p>
       ) : null}
+      {question.links?.length ? (
+        <div className="mt-1.5 flex flex-wrap gap-1.5" data-question-links>
+          {question.links.flatMap((url) => {
+            const link = parseStandaloneHttpUrl(url);
+            return link
+              ? [<UserLinkPreview key={url} link={link} cwd={cwd} compact />]
+              : [];
+          })}
+        </div>
+      ) : null}
       {options.length === 0 && question.allowCustom ? (
         <input
           value={custom}
@@ -335,6 +362,11 @@ function QuestionFields({
                   <span className="min-w-0 flex-1">
                     <span className="block text-[12px] leading-snug text-content">
                       {option.label}
+                      {option.recommended ? (
+                        <span className="ml-1.5 rounded-full bg-accent/15 px-1.5 py-px align-[1px] text-[10px] text-accent">
+                          Recommended
+                        </span>
+                      ) : null}
                     </span>
                     {option.description ? (
                       <span className="mt-0.5 block text-[11px] leading-snug text-content/50">

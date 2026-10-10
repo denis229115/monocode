@@ -618,6 +618,13 @@ import {
   ARTIFACT_DELETED_EVENT,
 } from "../features/artifacts/artifacts";
 import {
+  decisionAnswerText,
+  findDecisionCard,
+  recordDecisionCard,
+  settleDecisionCard,
+  type DecisionCard,
+} from "../features/sessions/model/decisionCard";
+import {
   MonoChangesPanel,
   type MonoChangesRequest,
 } from "../features/monos/ui/MonoChangesPanel";
@@ -7888,8 +7895,26 @@ function Workspace({
           ) {
             appContext.push(monoContext(agentLook, agentFiles, agentPlan));
           }
-          if (operatorCommand.matched || handAgent) {
-            const cli = `${shellPath(await invoke<string>("app_cli_path"))} app`;
+          const operatorContext = operatorCommand.matched || handAgent;
+          // Every agent can leave the user a decision card; it learns how
+          // once per provider conversation, or when a Mono is handed itself.
+          const askContext =
+            (!current.providerSessionId || handAgent) &&
+            !rawCommand &&
+            !current.inboxAsk &&
+            !current.orchestrationLeadId &&
+            !orchestrator.run(sessionId) &&
+            !isHabitRun(sessionId);
+          const cli =
+            operatorContext || askContext
+              ? `${shellPath(await invoke<string>("app_cli_path"))} app`
+              : "";
+          if (askContext) {
+            appContext.push(
+              `<monocode_ask>\nWhen you need the user to decide something before you go on, leave a decision card in this chat instead of asking in prose: \`${cli} chat.ask --json '{"questions":[{"header":"Release","question":"Merge PR #12 now?","options":[{"label":"Merge now","description":"What happens","recommended":true},{"label":"Wait"}],"links":["https://github.com/owner/repo/pull/12"]}]}'\`. It returns at once; then end your turn. The user's answer arrives later as your next message, each question on one line with its answer under it. Run \`${cli} --help\` for every field.\n</monocode_ask>`,
+            );
+          }
+          if (operatorContext) {
             appContext.push(
               `<monocode_app>\n${handAgent ? "App access is always enabled in this thread." : "The user's Operator command enables app access in this thread, including later turns without the command."} You can start session tabs or split session panes right or down, list and create project worktrees, choose a new session's checkout, read, continue, stop, archive or delete other project sessions, save unsent drafts, organize session folders, and read or write saved notes through its local CLI. Run \`${cli} --help\` when you need the exact commands and JSON fields. When reading another session, start with its latest two or three user/assistant exchanges. Request older exchanges with nextBefore or a larger excerpt only if needed. The CLI uses a session credential already in your environment; never print it. New sessions inherit this session's permission mode unless runtimeMode is set explicitly. For a new session with a draft, call sessions.start with its prompt and draft:true; do not submit a seed prompt. The returned ID can be used as besideSessionId to split its pane again or moved into a folder immediately. A normal sessions.start submits its prompt but returns after acceptance, so do not wait for that agent to finish before organizing it.\n</monocode_app>`,
             );
@@ -10083,6 +10108,39 @@ function Workspace({
     [],
   );
 
+  /**
+   * Sends a decision card's answers as the agent's next message, after any
+   * running turn, and settles the card once the message is accepted.
+   */
+  const onDecisionAnswer = useCallback(
+    (sessionId: string, cardId: string, reply: UserQuestionReply) => {
+      const session = sessionsRef.current.find((s) => s.id === sessionId);
+      const card = session && findDecisionCard(session.blocks, cardId);
+      if (!session || !card || card.outcome || session.worktreeRemoved) return;
+      const settle = (outcome: NonNullable<DecisionCard["outcome"]>) =>
+        setSessions((prev) =>
+          prev.map((s) =>
+            s.id === sessionId ? settleDecisionCard(s, cardId, outcome) : s,
+          ),
+        );
+      if (reply.kind === "skipped") {
+        settle({ kind: "dismissed", at: Date.now() });
+        return;
+      }
+      void Promise.resolve(
+        submitSessionRef.current(
+          sessionId,
+          decisionAnswerText(card, reply),
+          [],
+          { followUpBehavior: "queue" },
+        ),
+      ).then((accepted) => {
+        if (accepted) settle({ kind: "answered", at: Date.now(), reply });
+      });
+    },
+    [],
+  );
+
   const onQuestionInteraction = useCallback(
     (sessionId: string, requestId: number) => {
       const session = sessionsRef.current.find((s) => s.id === sessionId);
@@ -10895,6 +10953,35 @@ function Workspace({
               );
               setSessions(sessionsRef.current);
               if (!isHabitRun(sessionId)) await upsertSession(updated);
+            },
+            askDecision: async (sessionId, card) => {
+              let stored: DecisionCard | undefined;
+              let updated: Session | undefined;
+              flushSync(() =>
+                setSessions((prev) =>
+                  prev.map((session) => {
+                    if (session.id !== sessionId) return session;
+                    stored = findDecisionCard(session.blocks, card.id);
+                    if (stored) return session;
+                    const anchor =
+                      sourceTurnId &&
+                      session.blocks.some((block) => block.id === sourceTurnId)
+                        ? sourceTurnId
+                        : lastUserBlockId(session);
+                    if (!anchor) return session;
+                    stored = card;
+                    updated = recordDecisionCard(session, anchor, card);
+                    return updated;
+                  }),
+                ),
+              );
+              if (!stored)
+                throw new Error(
+                  "The conversation turn that asked is no longer available",
+                );
+              if (updated && shouldPersistSession(updated))
+                await upsertSession(updated);
+              return stored;
             },
             isMono: (id) => isMonoSession(id),
             isHabitRun: (id) => isHabitRun(id),
@@ -12246,6 +12333,7 @@ function Workspace({
     approval: onApproval,
     question: onQuestionReply,
     questionInteraction: onQuestionInteraction,
+    decision: onDecisionAnswer,
     reveal: onOpenMono,
     openArtifact: async (monoId, id) => {
       await onOpenMono(monoId);
@@ -12300,6 +12388,7 @@ function Workspace({
     onApproval,
     onQuestionReply,
     onQuestionInteraction,
+    onDecisionAnswer,
     onOpenFile,
     onOpenDiff,
     onOpenPlan,
