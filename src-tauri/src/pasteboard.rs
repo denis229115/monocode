@@ -444,22 +444,33 @@ mod tests {
     use objc2_app_kit::{NSPasteboard, NSPasteboardTypeFileURL, NSPasteboardTypeString};
     use objc2_foundation::{NSString, NSURL};
     use std::path::Path;
-    use std::sync::{Mutex, MutexGuard};
 
-    /// A private pasteboard once returned another test's item while these ran
-    /// on parallel threads, so they take turns.
-    static PASTEBOARD_TURN: Mutex<()> = Mutex::new(());
-
-    fn private_pasteboard() -> (MutexGuard<'static, ()>, objc2::rc::Retained<NSPasteboard>) {
-        let turn = PASTEBOARD_TURN
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        (turn, NSPasteboard::pasteboardWithUniqueName())
+    /// The board's name and every raw item it holds, so a failed read shows
+    /// whether the test got its own data back.
+    fn board(pb: &NSPasteboard) -> String {
+        let items: Vec<Vec<String>> = pb
+            .pasteboardItems()
+            .map(|items| {
+                items
+                    .iter()
+                    .map(|item| {
+                        item.types()
+                            .iter()
+                            .map(|kind| {
+                                let value = item.stringForType(&kind).map(|s| s.to_string());
+                                format!("{kind}={value:?}")
+                            })
+                            .collect()
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        format!("pasteboard {} holds {items:?}", pb.name())
     }
 
     #[test]
     fn reads_file_urls_from_a_private_pasteboard() {
-        let (_turn, pb) = private_pasteboard();
+        let pb = NSPasteboard::pasteboardWithUniqueName();
         pb.clearContents();
         let ok = pb.setString_forType(
             &NSString::from_str("file:///tmp/finder%20copy.txt"),
@@ -468,7 +479,9 @@ mod tests {
         assert!(ok);
         assert_eq!(
             file_paths_from(&pb),
-            vec!["/tmp/finder copy.txt".to_string()]
+            vec!["/tmp/finder copy.txt".to_string()],
+            "{}",
+            board(&pb)
         );
     }
 
@@ -495,7 +508,7 @@ mod tests {
         let reference = url.fileReferenceURL().unwrap();
         assert!(reference.isFileReferenceURL());
 
-        let (_turn, pb) = private_pasteboard();
+        let pb = NSPasteboard::pasteboardWithUniqueName();
         pb.clearContents();
         assert!(
             pb.setString_forType(&reference.absoluteString().unwrap(), unsafe {
@@ -506,12 +519,17 @@ mod tests {
         let renamed = dir.join("renamed image #1.png");
         std::fs::rename(&original, &renamed).unwrap();
         let paths = file_paths_from(&pb);
-        assert_eq!(paths, vec![renamed.to_str().unwrap().to_string()]);
+        assert_eq!(
+            paths,
+            vec![renamed.to_str().unwrap().to_string()],
+            "{}",
+            board(&pb)
+        );
     }
 
     #[test]
     fn ignores_file_urls_with_non_local_hosts() {
-        let (_turn, pb) = private_pasteboard();
+        let pb = NSPasteboard::pasteboardWithUniqueName();
         for url in [
             "file://server.example/tmp/a.png",
             r"file://localhost\@server.example/tmp/a.png",
@@ -524,13 +542,17 @@ mod tests {
                 pb.setString_forType(&NSString::from_str(url), unsafe { NSPasteboardTypeFileURL })
             );
             let paths = file_paths_from(&pb);
-            assert!(paths.is_empty(), "accepted {url} as {paths:?}");
+            assert!(
+                paths.is_empty(),
+                "accepted {url} as {paths:?}; {}",
+                board(&pb)
+            );
         }
     }
 
     #[test]
     fn accepts_file_urls_with_a_localhost_host() {
-        let (_turn, pb) = private_pasteboard();
+        let pb = NSPasteboard::pasteboardWithUniqueName();
         pb.clearContents();
         assert!(pb.setString_forType(
             &NSString::from_str("file://localhost/tmp/finder%20copy.txt"),
@@ -538,38 +560,42 @@ mod tests {
         ));
         assert_eq!(
             file_paths_from(&pb),
-            vec!["/tmp/finder copy.txt".to_string()]
+            vec!["/tmp/finder copy.txt".to_string()],
+            "{}",
+            board(&pb)
         );
     }
 
     #[test]
     fn ignores_pasteboards_without_file_urls() {
-        let (_turn, pb) = private_pasteboard();
+        let pb = NSPasteboard::pasteboardWithUniqueName();
         pb.clearContents();
         pb.setString_forType(&NSString::from_str("hello"), unsafe {
             NSPasteboardTypeString
         });
-        assert!(file_paths_from(&pb).is_empty());
+        assert!(file_paths_from(&pb).is_empty(), "{}", board(&pb));
     }
 
     #[test]
     fn ignores_non_file_urls_in_file_url_items() {
-        let (_turn, pb) = private_pasteboard();
+        let pb = NSPasteboard::pasteboardWithUniqueName();
         pb.clearContents();
         pb.setString_forType(
             &NSString::from_str("https://example.com/image.png"),
             unsafe { NSPasteboardTypeFileURL },
         );
-        assert!(file_paths_from(&pb).is_empty());
+        assert!(file_paths_from(&pb).is_empty(), "{}", board(&pb));
     }
 
     #[test]
     fn writes_original_file_url_to_a_private_pasteboard() {
-        let (_turn, pb) = private_pasteboard();
+        let pb = NSPasteboard::pasteboardWithUniqueName();
         write_file_to(&pb, Path::new("/tmp/original image.png")).unwrap();
         assert_eq!(
             file_paths_from(&pb),
-            vec!["/tmp/original image.png".to_string()]
+            vec!["/tmp/original image.png".to_string()],
+            "{}",
+            board(&pb)
         );
     }
 }
