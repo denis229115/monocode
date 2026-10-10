@@ -82,7 +82,7 @@ const ACTIONS: [&str; 12] = [
     "list", "delegate", "get", "steer", "message", "retry", "cancel", "wait", "review", "finish",
     "respond", "answer",
 ];
-const APP_ACTIONS: [&str; 32] = [
+const APP_ACTIONS: [&str; 33] = [
     "models.list",
     "sessions.list",
     "sessions.read",
@@ -115,8 +115,10 @@ const APP_ACTIONS: [&str; 32] = [
     "habits.run",
     "habits.remove",
     "chat.card",
+    "chat.ask",
 ];
-const APP_USAGE: &str = r#"MonoCode app access — use in a thread enabled by /operator.
+const APP_USAGE: &str = r#"MonoCode app access — use in a thread enabled by /operator. Every session's
+agent may call chat.ask during its turn, without /operator.
 
 Usage: {exe} app ACTION [--json JSON | --input FILE|-] [--request-id ID]
 
@@ -259,6 +261,24 @@ Actions:
                    "schedule":{"kind":"daily","time":"09:00"}}
                   choices accepts 1–4 options. A habit card is a suggestion;
                   the user must start it before it is scheduled.
+  chat.ask       {"questions":[{"id":"merge","header":"Release",
+                   "question":"Merge PR #12 now?",
+                   "options":[{"label":"Merge now","description":"CI is green",
+                               "value":"merge","recommended":true},
+                              {"label":"Wait","description":"Until Windows passes"}],
+                   "links":["https://github.com/owner/repo/pull/12"],
+                   "multiSelect":false,"allowCustom":true}]}
+                  Any session or Mono. Leave a card of 1–4 questions in this
+                  chat for the user to decide, then end your turn: the call
+                  returns at once and does not wait. The answer arrives later
+                  as your next message, each question on one line with its
+                  answer under it: an option's value (its label when it has
+                  none), several joined with commas, or what the user typed.
+                  Up to 9 options; mark the one you recommend. links are up to
+                  4 http(s) URLs to look at first; a PR link shows as a PR
+                  card. allowCustom (default true) lets the user type an
+                  answer. Reuse --request-id on retries; it returns the same
+                  card and its status: waiting, answered or dismissed.
 
 The output is one JSON line: {"ok":true,"result":...} or {"ok":false,"error":"..."}.
 Use --input - to pass JSON on stdin. Never print MonoCode credentials.
@@ -701,6 +721,22 @@ mod tests {
         for kind in ["pr", "session", "choices", "habit"] {
             assert!(help.contains(&format!(r#""type":"{kind}""#)));
         }
+    }
+
+    #[test]
+    fn app_mode_accepts_decision_cards_and_documents_them() {
+        let input = r#"{"questions":[{"question":"Merge now?","options":[{"label":"Yes","recommended":true}]}]}"#;
+        assert!(matches!(
+            parse_args_for(&args(&["chat.ask", "--json", input]), true),
+            Ok(Parsed::Call(action, parsed_input, _))
+                if action == "chat.ask"
+                    && parsed_input == serde_json::from_str::<Value>(input).unwrap()
+        ));
+        assert!(parse_args_for(&args(&["chat.ask"]), false).is_err());
+        let help = app_help();
+        assert!(help.contains("chat.ask"));
+        assert!(help.contains(r#""recommended":true"#));
+        assert!(help.contains("does not wait"));
     }
 
     #[test]

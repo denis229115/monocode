@@ -234,6 +234,8 @@ type Props = {
   noteCard?: NoteComposerCard;
   handoffCard?: HandoffComposerCard;
   question?: UserQuestionPrompt;
+  /** Decision cards the agent left waiting; shown when no live question is. */
+  decisions?: ReactNode;
   busy?: boolean;
   /** Allow typed text to replace Stop with Send while a turn is running. */
   allowBusySubmit?: boolean;
@@ -359,6 +361,7 @@ export function Composer({
   noteCard,
   handoffCard,
   question,
+  decisions,
   busy = false,
   allowBusySubmit = true,
   editLastTurnSupported = false,
@@ -1724,7 +1727,9 @@ export function Composer({
           onReply={onQuestionReply}
           onInteraction={onQuestionInteraction}
         />
-      ) : null}
+      ) : (
+        decisions
+      )}
       {children}
       {usageLimit ? (
         <UsageLimitNotice

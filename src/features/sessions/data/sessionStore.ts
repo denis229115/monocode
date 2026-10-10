@@ -49,6 +49,10 @@ import type {
 import { HARNESSES, RUNTIME_MODES } from "../model/session";
 
 import { restoreOrchestrationProposal } from "../../orchestration/model/orchestrationPlan";
+import {
+  restoreDecisionCards,
+  type DecisionCard,
+} from "../model/decisionCard";
 
 import type { OrchestrationSummary } from "../../orchestration/model/orchestrationSummary";
 
@@ -80,6 +84,7 @@ export type SessionSummary = {
 
 type SessionRecord = {
   sidebarHidden?: boolean;
+  decisionCards?: unknown[];
   monoTranscript?: Session["monoTranscript"];
   orchestrationLeadId?: string;
   id: string;
@@ -565,6 +570,8 @@ export type MonoTranscriptPage = {
   blocks: Block[];
   before: number | null;
   hasNewer: boolean;
+  /** Decision cards asked in this page's turns. */
+  decisionCards: DecisionCard[];
 };
 
 export async function getMonoTranscriptPage(
@@ -575,7 +582,9 @@ export async function getMonoTranscriptPage(
     aroundBlockId?: string;
   } = {},
 ): Promise<MonoTranscriptPage> {
-  const page = await invoke<MonoTranscriptPage>("mono_session_page", {
+  const page = await invoke<
+    Omit<MonoTranscriptPage, "decisionCards"> & { decisionCards?: unknown }
+  >("mono_session_page", {
     sessionId,
     before: options.before ?? null,
     beforeBlockId: options.beforeBlockId ?? null,
@@ -583,6 +592,7 @@ export async function getMonoTranscriptPage(
   });
   return {
     ...page,
+    decisionCards: restoreDecisionCards(page.decisionCards),
     blocks: page.blocks
       .map((block) => sanitizeBlock(block, { hydrate: true }))
       .filter((block): block is Block => !!block),
@@ -1413,9 +1423,11 @@ function recordToSession(record: SessionRecord): Session {
     : [];
   const linkedWorkItem = sanitizeLinkedWorkItem(record.linkedWorkItem);
   const queuedMessages = sanitizeQueuedMessages(record.queuedMessages);
+  const decisionCards = restoreDecisionCards(record.decisionCards);
   return {
     id: record.id,
     sidebarHidden: record.sidebarHidden === true || undefined,
+    ...(decisionCards.length ? { decisionCards } : {}),
     cwd: record.cwd,
     harness: asHarness(record.harness),
     model: record.model,

@@ -633,6 +633,16 @@ import {
   removeArtifactCard,
   ARTIFACT_DELETED_EVENT,
 } from "../features/artifacts/artifacts";
+import {
+  findDecisionCard,
+  withDecisionCard,
+} from "../features/sessions/model/decisionCard";
+import { decisionAnswerer } from "../features/sessions/model/decisionAnswers";
+import {
+  askDecisionCard,
+  claimDecisionCard,
+  releaseDecisionCard,
+} from "../features/sessions/data/decisionCards";
 import type { MonoChangesRequest } from "../features/monos/ui/MonoChangesView";
 import {
   claimDueAutomations,
@@ -8002,8 +8012,26 @@ function Workspace({
           ) {
             appContext.push(monoContext(agentLook, agentFiles, agentPlan));
           }
-          if (operatorCommand.matched || handAgent) {
-            const cli = `${shellPath(await invoke<string>("app_cli_path"))} app`;
+          const operatorContext = operatorCommand.matched || handAgent;
+          // Every agent can leave the user a decision card; it learns how
+          // once per provider conversation, or when a Mono is handed itself.
+          const askContext =
+            (!current.providerSessionId || handAgent) &&
+            !rawCommand &&
+            !current.inboxAsk &&
+            !current.orchestrationLeadId &&
+            !orchestrator.run(sessionId) &&
+            !isHabitRun(sessionId);
+          const cli =
+            operatorContext || askContext
+              ? `${shellPath(await invoke<string>("app_cli_path"))} app`
+              : "";
+          if (askContext) {
+            appContext.push(
+              `<monocode_ask>\nWhen you need the user to decide something before you go on, leave a decision card in this chat instead of asking in prose: \`${cli} chat.ask --json '{"questions":[{"header":"Release","question":"Merge PR #12 now?","options":[{"label":"Merge now","description":"What happens","recommended":true},{"label":"Wait"}],"links":["https://github.com/owner/repo/pull/12"]}]}'\`. It returns at once; then end your turn. The user's answer arrives later as your next message, each question on one line with its answer under it. Run \`${cli} --help\` for every field.\n</monocode_ask>`,
+            );
+          }
+          if (operatorContext) {
             appContext.push(
               `<monocode_app>\n${handAgent ? "App access is always enabled in this thread." : "The user's Operator command enables app access in this thread, including later turns without the command."} You can start session tabs or split session panes right or down, list and create project worktrees, choose a new session's checkout, read, continue, stop, archive or delete other project sessions, save unsent drafts, organize session folders, and read or write saved notes through its local CLI. Run \`${cli} --help\` when you need the exact commands and JSON fields. When reading another session, start with its latest two or three user/assistant exchanges. Request older exchanges with nextBefore or a larger excerpt only if needed. The CLI uses a session credential already in your environment; never print it. New sessions inherit this session's permission mode unless runtimeMode is set explicitly. For a new session with a draft, call sessions.start with its prompt and draft:true; do not submit a seed prompt. The returned ID can be used as besideSessionId to split its pane again or moved into a folder immediately. A normal sessions.start submits its prompt but returns after acceptance, so do not wait for that agent to finish before organizing it.\n</monocode_app>`,
             );
@@ -10201,6 +10229,57 @@ function Workspace({
     [],
   );
 
+  /**
+   * Saves a decision card's outcome first, then sends its answers as the
+   * agent's next message, after any running turn.
+   */
+  const answerDecision = useRef(
+    decisionAnswerer({
+      card: (sessionId, cardId) => {
+        const session = sessionsRef.current.find((s) => s.id === sessionId);
+        return session && !session.worktreeRemoved
+          ? findDecisionCard(session, cardId)
+          : undefined;
+      },
+      claim: claimDecisionCard,
+      release: releaseDecisionCard,
+      send: async (sessionId, text) => {
+        const accepted = await submitSessionRef.current(sessionId, text, [], {
+          followUpBehavior: "queue",
+        });
+        if (!accepted) return false;
+        // The card is already saved as answered; save the message carrying
+        // the answer too, rather than waiting for the next routine save. The
+        // no-op update reads the session with the queued message applied.
+        let latest: Session | undefined;
+        flushSync(() =>
+          setSessions((prev) => {
+            latest = prev.find((s) => s.id === sessionId);
+            return prev;
+          }),
+        );
+        if (latest && shouldPersistSession(latest))
+          await upsertSession(latest).catch((error) =>
+            console.error("Failed to save the decision answer:", error),
+          );
+        return true;
+      },
+      show: (sessionId, card) =>
+        setSessions((prev) =>
+          prev.map((s) => (s.id === sessionId ? withDecisionCard(s, card) : s)),
+        ),
+      now: Date.now,
+    }),
+  );
+  const onDecisionAnswer = useCallback(
+    (sessionId: string, cardId: string, reply: UserQuestionReply) => {
+      void answerDecision.current(sessionId, cardId, reply).catch((error) =>
+        console.error("Failed to answer the decision card:", error),
+      );
+    },
+    [],
+  );
+
   const onQuestionInteraction = useCallback(
     (sessionId: string, requestId: number) => {
       const session = sessionsRef.current.find((s) => s.id === sessionId);
@@ -10651,7 +10730,10 @@ function Workspace({
         if (previous) {
           if (previous.signature !== signature)
             throw new Error("Request ID was already used with different input");
-          return previous.promise;
+          // A card can be answered after it was asked, so a retry waits for
+          // the first call and then reads the stored card again.
+          if (payload.action !== "chat.ask") return previous.promise;
+          await previous.promise.catch(() => undefined);
         }
         const sourceMono =
           monoForSession(source.id) ?? findMono(habitRunMono(source.id) ?? "");
@@ -11032,6 +11114,34 @@ function Workspace({
               );
               setSessions(sessionsRef.current);
               if (!isHabitRun(sessionId)) await upsertSession(updated);
+            },
+            askDecision: async (sessionId, card) => {
+              const latest = sessionsRef.current.find(
+                (session) => session.id === sessionId,
+              );
+              const turnId =
+                latest &&
+                (sourceTurnId &&
+                latest.blocks.some((block) => block.id === sourceTurnId)
+                  ? sourceTurnId
+                  : lastUserBlockId(latest));
+              if (!turnId)
+                throw new Error(
+                  "The conversation turn that asked is no longer available",
+                );
+              // Storage finds a retried request ID across the whole history.
+              const stored = await askDecisionCard(sessionId, {
+                ...card,
+                turnId,
+              });
+              setSessions((prev) =>
+                prev.map((session) =>
+                  session.id === sessionId
+                    ? withDecisionCard(session, stored)
+                    : session,
+                ),
+              );
+              return stored;
             },
             isMono: (id) => isMonoSession(id),
             isHabitRun: (id) => isHabitRun(id),
@@ -12391,6 +12501,7 @@ function Workspace({
     approval: onApproval,
     question: onQuestionReply,
     questionInteraction: onQuestionInteraction,
+    decision: onDecisionAnswer,
     reveal: onOpenMono,
     openArtifact: async (monoId, id) => {
       await onOpenMono(monoId);
@@ -12445,6 +12556,7 @@ function Workspace({
     onApproval,
     onQuestionReply,
     onQuestionInteraction,
+    onDecisionAnswer,
     onOpenFile,
     onOpenDiff,
     onOpenPlan,

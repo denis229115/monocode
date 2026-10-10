@@ -258,6 +258,7 @@ it("renders older replies immediately when scrolling up loads a Mono page", asyn
     ],
     before: null,
     hasNewer: true,
+    decisionCards: [],
   });
   act(() => root.render(createElement(SessionPane, pane)));
   const scroller =
