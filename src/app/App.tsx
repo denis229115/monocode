@@ -436,6 +436,7 @@ import {
   HARNESS_TITLE,
   canReplaceSessionTitle,
   formatSessionTitle,
+  needsInputSessionIds,
   sessionNeedsInput,
   newDefaultSession,
   newSession,
@@ -547,6 +548,7 @@ import {
   createMono,
   findMono,
   isMonoSession,
+  MONO_WAITING_CARD_STATE,
   listMonos,
   monoForSession,
   monoLook,
@@ -626,6 +628,7 @@ import {
   askDecisionCard,
   claimDecisionCard,
   releaseDecisionCard,
+  waitingDecisionSessions,
 } from "../features/sessions/data/decisionCards";
 import {
   MonoChangesPanel,
@@ -2045,16 +2048,38 @@ function Workspace({
     return !!focused && ids.has(focused.id);
   }, [activeTab, currentProjectDock, runningTerminals]);
 
-  const nextApprovalSessionIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const session of sessions) {
-      if (sessionNeedsInput(session)) {
-        ids.add(session.id);
-        if (session.orchestrationLeadId) ids.add(session.orchestrationLeadId);
-      }
-    }
-    return ids;
+  // Saved cards still waiting, for chats this window has not loaded. Once a
+  // chat loads, its own cards answer for it.
+  const [savedWaitingDecisions, setSavedWaitingDecisions] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
+  useEffect(() => {
+    let cancelled = false;
+    void waitingDecisionSessions()
+      .then((ids) => {
+        if (cancelled) return;
+        for (const session of sessionsRef.current) ids.delete(session.id);
+        setSavedWaitingDecisions(ids);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  useEffect(() => {
+    setSavedWaitingDecisions((saved) => {
+      if (!saved.size || !sessions.some((session) => saved.has(session.id)))
+        return saved;
+      const next = new Set(saved);
+      for (const session of sessions) next.delete(session.id);
+      return next;
+    });
   }, [sessions]);
+
+  const nextApprovalSessionIds = useMemo(
+    () => needsInputSessionIds(sessions, savedWaitingDecisions),
+    [sessions, savedWaitingDecisions],
+  );
   const approvalSessionIdsRef = useRef(nextApprovalSessionIds);
   if (!setsEqual(approvalSessionIdsRef.current, nextApprovalSessionIds)) {
     approvalSessionIdsRef.current = nextApprovalSessionIds;
@@ -12517,12 +12542,14 @@ function Workspace({
         ? sessions.find((entry) => entry.id === mono.sessionId)
         : undefined;
       if (session) states.set(mono.id, monoState(session));
+      else if (mono.sessionId && savedWaitingDecisions.has(mono.sessionId))
+        states.set(mono.id, MONO_WAITING_CARD_STATE);
       if (mono.sessionId && unseenFinishedIds.has(mono.sessionId))
         unseen.add(mono.id);
     }
     return { states, unseen };
     // The roster is read through its snapshot.
-  }, [monosSnap, sessions, unseenFinishedIds]);
+  }, [monosSnap, sessions, savedWaitingDecisions, unseenFinishedIds]);
 
   const chromeSurfaceOpen =
     searchViewOpen ||
