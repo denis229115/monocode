@@ -47,7 +47,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("transcript first paint", () => {
+// A ceiling, not a delay: each wait returns once the window has grown. The
+// growth is a deferred render, which can take seconds on a busy machine.
+const UNDER_LOAD = { timeout: 10_000 };
+
+describe("transcript first paint", { timeout: 30_000 }, () => {
   it("paints the latest turns first and builds the window after", async () => {
     flushSync(() =>
       root.render(
@@ -59,7 +63,7 @@ describe("transcript first paint", () => {
     );
     expect(renderedTurns()).toBe(3);
 
-    await vi.waitFor(() => expect(renderedTurns()).toBe(20));
+    await vi.waitFor(() => expect(renderedTurns()).toBe(20), UNDER_LOAD);
     expect(container.textContent).toContain("Load earlier messages");
   });
 
@@ -79,7 +83,7 @@ describe("transcript first paint", () => {
       get: () => renderedTurns() * 100,
     });
 
-    await vi.waitFor(() => expect(renderedTurns()).toBe(20));
+    await vi.waitFor(() => expect(renderedTurns()).toBe(20), UNDER_LOAD);
     expect(scroller.scrollTop).toBe(2000);
   });
 
