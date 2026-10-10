@@ -162,6 +162,19 @@ pub(crate) fn delete_for_session(conn: &Connection, session_id: &str) -> rusqlit
     Ok(())
 }
 
+/// Sessions with a card still waiting on the user, for chats not yet loaded.
+/// A card being delivered or settled is no longer waiting.
+fn waiting_sessions(conn: &Connection) -> rusqlite::Result<Vec<String>> {
+    let mut statement = conn.prepare(
+        "SELECT DISTINCT cards.session_id FROM decision_cards cards
+         JOIN sessions ON sessions.id = cards.session_id
+         WHERE cards.waiting = 1 AND sessions.worktree_removed = 0
+         ORDER BY cards.session_id",
+    )?;
+    let rows = statement.query_map([], |row| row.get(0))?;
+    rows.collect()
+}
+
 fn ids(session_id: &str, card_id: &str) -> Result<(), String> {
     session_store::validate_id(session_id, "session")?;
     if card_id.len() > 128 {
@@ -203,6 +216,14 @@ pub fn decision_card_release(
     ids(&session_id, &card_id)?;
     let conn = store.lock_conn()?;
     release(&conn, &session_id, &card_id, &outcome).map_err(|e| e.to_string())
+}
+
+#[tauri::command(async)]
+pub fn decision_card_waiting_sessions(
+    store: State<'_, SessionStore>,
+) -> Result<Vec<String>, String> {
+    let conn = store.lock_conn()?;
+    waiting_sessions(&conn).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -271,6 +292,36 @@ mod tests {
         let loaded = list(&conn, "s", &HashSet::new(), true).unwrap();
         assert_eq!(ids(&loaded), ["a"]);
         assert!(claim(&conn, "s", "a", &no).unwrap().claimed);
+    }
+
+    #[test]
+    fn lists_sessions_with_a_waiting_card_while_their_worktree_stands() {
+        let conn = conn();
+        conn.execute_batch(
+            "CREATE TABLE sessions (id TEXT PRIMARY KEY, worktree_removed INTEGER NOT NULL);
+             INSERT INTO sessions VALUES ('waiting', 0), ('settled', 0), ('removed', 0), ('both', 0);",
+        )
+        .unwrap();
+        for (session, card) in [
+            ("waiting", "a"),
+            ("settled", "a"),
+            ("removed", "a"),
+            ("both", "a"),
+            ("both", "b"),
+            ("deleted", "a"),
+        ] {
+            ask(&conn, session, &json!({"id": card, "turnId": "t"})).unwrap();
+        }
+        claim(&conn, "settled", "a", &json!({"kind": "dismissed"})).unwrap();
+        claim(&conn, "both", "a", &json!({"kind": "dismissed"})).unwrap();
+        conn.execute(
+            "UPDATE sessions SET worktree_removed = 1 WHERE id = 'removed'",
+            [],
+        )
+        .unwrap();
+        assert_eq!(waiting_sessions(&conn).unwrap(), ["both", "waiting"]);
+        claim(&conn, "both", "b", &json!({"kind": "answered", "at": 1})).unwrap();
+        assert_eq!(waiting_sessions(&conn).unwrap(), ["waiting"]);
     }
 
     #[test]

@@ -40,3 +40,8 @@ export async function releaseDecisionCard(
     await invoke("decision_card_release", { sessionId, cardId, outcome }),
   );
 }
+
+/** Sessions with a saved card still waiting, read once for chats not loaded. */
+export async function waitingDecisionSessions(): Promise<Set<string>> {
+  return new Set(await invoke<string[]>("decision_card_waiting_sessions"));
+}
