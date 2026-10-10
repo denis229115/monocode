@@ -11,7 +11,7 @@ import { Check, ExternalLink, MessageSquare } from "../../../shared/ui/icons";
 import {
   CUSTOM_OPTION_ID,
   buildQuestionReply,
-  isOtherOption,
+  isTypedAnswerOption,
   questionIsComplete,
   type UserQuestion,
   type UserQuestionPrompt,
@@ -337,8 +337,7 @@ function QuestionFields({
           role="group"
         >
           {options.map((option, optionIndex) => {
-            const isCustom =
-              isOtherOption(option) || option.id === CUSTOM_OPTION_ID;
+            const isCustom = isTypedAnswerOption(question, option);
             const active = selected.includes(option.id);
             return (
               <div key={option.id}>
@@ -420,14 +419,20 @@ function QuestionFields({
 
 function displayOptions(question: UserQuestion): UserQuestion["options"] {
   if (question.options.length === 0) return question.options;
-  if (question.options.some(isOtherOption) || !question.allowCustom) {
+  if (
+    question.options.some((option) => isTypedAnswerOption(question, option)) ||
+    !question.allowCustom
+  ) {
     return question.options;
   }
   return [...question.options, { id: CUSTOM_OPTION_ID, label: "Other" }];
 }
 
 function customOptionId(question: UserQuestion): string {
-  return question.options.find(isOtherOption)?.id ?? CUSTOM_OPTION_ID;
+  return (
+    question.options.find((option) => isTypedAnswerOption(question, option))
+      ?.id ?? CUSTOM_OPTION_ID
+  );
 }
 
 function isCustomId(question: UserQuestion, optionId: string): boolean {

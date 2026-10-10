@@ -12,18 +12,23 @@ type AnsweredReply = Extract<UserQuestionReply, { kind: "answered" }>;
 /**
  * A card of questions an agent leaves in its chat with the app CLI's
  * `chat.ask`. The call returns at once so the agent can end its turn; the card
- * waits on the turn that asked until the user answers it, which sends the
- * answers as the agent's next message, or dismisses it.
+ * waits until the user answers it, which sends the answers as the agent's next
+ * message, or dismisses it. Cards are saved beside the transcript, so one is
+ * found by its request ID however little of the conversation is loaded.
  */
 export type DecisionCard = {
   /** The CLI request ID, unique within the session that asked. */
   id: string;
+  /** The block that opens the turn that asked; its summary shows there. */
+  turnId: string;
   questions: UserQuestion[];
   askedAt: number;
-  outcome?:
-    | { kind: "answered"; at: number; reply: AnsweredReply }
-    | { kind: "dismissed"; at: number };
+  outcome?: DecisionOutcome;
 };
+
+export type DecisionOutcome =
+  | { kind: "answered"; at: number; reply: AnsweredReply }
+  | { kind: "dismissed"; at: number };
 
 export const DECISION_FIELDS = ["questions"] as const;
 
@@ -70,6 +75,38 @@ function webLink(value: unknown): string {
   return url.href;
 }
 
+/**
+ * The rules every card keeps, from the CLI or from storage: answers are kept
+ * by question id, so ids must be distinct and never name an object property.
+ */
+function checkQuestions(questions: UserQuestion[]): UserQuestion[] {
+  if (questions.length < 1 || questions.length > MAX_QUESTIONS)
+    throw new Error(`questions must be a list of 1 to ${MAX_QUESTIONS}`);
+  for (const question of questions) {
+    const { id } = question;
+    if (id in Object.prototype)
+      throw new Error(`Question id ${id} is a reserved name; choose another`);
+    if (question.options.length > MAX_OPTIONS)
+      throw new Error(`options must be a list of at most ${MAX_OPTIONS}`);
+    const values = question.options.map((option) => option.id);
+    if (values.includes(CUSTOM_OPTION_ID))
+      throw new Error(`${CUSTOM_OPTION_ID} is reserved`);
+    if (new Set(values).size !== values.length)
+      throw new Error(
+        `Question ${id} has two options that send the same answer; give each its own value`,
+      );
+    if (question.options.filter((option) => option.recommended).length > 1)
+      throw new Error(`Question ${id} can recommend one option at most`);
+    if (!question.options.length && !question.allowCustom)
+      throw new Error(`Question ${id} has no options and no typed answer`);
+    if ((question.links?.length ?? 0) > MAX_LINKS)
+      throw new Error(`links must be a list of at most ${MAX_LINKS} URLs`);
+  }
+  if (new Set(questions.map((entry) => entry.id)).size !== questions.length)
+    throw new Error("Each question needs its own id");
+  return questions;
+}
+
 function option(value: unknown, where: string): UserQuestionOption {
   const input = fields(value, `${where} option`, [
     "label",
@@ -85,7 +122,6 @@ function option(value: unknown, where: string): UserQuestionOption {
   // What answering sends; the label stands in when the agent gives none.
   const id =
     input.value === undefined ? label : line(input.value, "value", 500);
-  if (id === CUSTOM_OPTION_ID) throw new Error(`${id} is reserved`);
   const recommended = flag(input.recommended, "recommended");
   return {
     id,
@@ -107,20 +143,10 @@ function question(value: unknown, index: number): UserQuestion {
   ]);
   const id = input.id === undefined ? `q${index + 1}` : line(input.id, "id", 64);
   const rawOptions = input.options ?? [];
-  if (!Array.isArray(rawOptions) || rawOptions.length > MAX_OPTIONS)
+  if (!Array.isArray(rawOptions))
     throw new Error(`options must be a list of at most ${MAX_OPTIONS}`);
-  const options = rawOptions.map((entry) => option(entry, `Question ${id}`));
-  if (new Set(options.map((entry) => entry.id)).size !== options.length)
-    throw new Error(
-      `Question ${id} has two options that send the same answer; give each its own value`,
-    );
-  if (options.filter((entry) => entry.recommended).length > 1)
-    throw new Error(`Question ${id} can recommend one option at most`);
-  const allowCustom = flag(input.allowCustom, "allowCustom") ?? true;
-  if (!options.length && !allowCustom)
-    throw new Error(`Question ${id} has no options and no typed answer`);
   const rawLinks = input.links ?? [];
-  if (!Array.isArray(rawLinks) || rawLinks.length > MAX_LINKS)
+  if (!Array.isArray(rawLinks))
     throw new Error(`links must be a list of at most ${MAX_LINKS} URLs`);
   const links = rawLinks.map(webLink);
   const header =
@@ -130,27 +156,41 @@ function question(value: unknown, index: number): UserQuestion {
     ...(header ? { header } : {}),
     prompt: text(input.question, "question", 2000),
     multiSelect: flag(input.multiSelect, "multiSelect") ?? false,
-    allowCustom,
-    options,
+    allowCustom: flag(input.allowCustom, "allowCustom") ?? true,
+    exactOptions: true,
+    options: rawOptions.map((entry) => option(entry, `Question ${id}`)),
     ...(links.length ? { links } : {}),
   };
 }
 
 /** The questions from the CLI's input, checked field by field. */
 export function parseDecisionQuestions(value: unknown): UserQuestion[] {
-  if (!Array.isArray(value) || value.length < 1 || value.length > MAX_QUESTIONS)
+  if (!Array.isArray(value))
     throw new Error(`questions must be a list of 1 to ${MAX_QUESTIONS}`);
-  const questions = value.map(question);
-  if (new Set(questions.map((entry) => entry.id)).size !== questions.length)
-    throw new Error("Each question needs its own id");
-  return questions;
+  if (value.length > MAX_QUESTIONS)
+    throw new Error(`questions must be a list of 1 to ${MAX_QUESTIONS}`);
+  return checkQuestions(value.map(question));
 }
 
+const own = (record: object, key: string) =>
+  Object.prototype.hasOwnProperty.call(record, key);
+
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map((key) => [key, canonical((value as Record<string, unknown>)[key])]),
+  );
+}
+
+/** Whether a retry asks the same questions, whatever order storage kept keys in. */
 export function sameDecisionQuestions(
   a: readonly UserQuestion[],
   b: readonly UserQuestion[],
 ): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
+  return JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
 }
 
 /** What one question's answer sends: option values, or the typed answer. */
@@ -158,8 +198,12 @@ function answerFor(
   question: UserQuestion,
   reply: AnsweredReply,
 ): string | undefined {
-  const custom = reply.custom?.[question.id]?.trim();
-  const selected = reply.answers[question.id] ?? [];
+  const custom = own(reply.custom ?? {}, question.id)
+    ? reply.custom?.[question.id]?.trim()
+    : undefined;
+  const selected = own(reply.answers, question.id)
+    ? reply.answers[question.id]
+    : [];
   const values = selected.length
     ? selected.flatMap((id) =>
         isCustomSelection(question, id) ? (custom ? [custom] : []) : [id],
@@ -183,58 +227,43 @@ export function decisionAnswerText(
     .join("\n\n");
 }
 
-export function decisionCards(blocks: readonly Block[]): DecisionCard[] {
-  return blocks.flatMap((block) => block.decisionCards ?? []);
-}
-
 export function waitingDecisionCards(
-  blocks: readonly Block[],
+  cards: readonly DecisionCard[] | undefined,
 ): DecisionCard[] {
-  return decisionCards(blocks).filter((card) => !card.outcome);
+  return (cards ?? []).filter((card) => !card.outcome);
 }
 
 export function findDecisionCard(
-  blocks: readonly Block[],
+  session: Pick<Session, "decisionCards">,
   id: string,
 ): DecisionCard | undefined {
-  return decisionCards(blocks).find((card) => card.id === id);
+  return session.decisionCards?.find((card) => card.id === id);
 }
 
-/** Keeps the card on the turn that asked, beside that turn's other cards. */
-export function recordDecisionCard(
+/** The cards asked during one transcript turn, in the order they were asked. */
+export function turnDecisionCards(
+  cards: readonly DecisionCard[] | undefined,
+  turn: readonly Block[],
+): DecisionCard[] {
+  if (!cards?.length) return [];
+  const ids = new Set(turn.map((block) => block.id));
+  return cards.filter((card) => ids.has(card.turnId));
+}
+
+/** Puts the stored card in the session, in place of any earlier copy. */
+export function withDecisionCard(
   session: Session,
-  turnId: string,
   card: DecisionCard,
 ): Session {
+  const cards = session.decisionCards ?? [];
+  const at = cards.findIndex((entry) => entry.id === card.id);
   return {
     ...session,
-    blocks: session.blocks.map((block) =>
-      block.id === turnId
-        ? { ...block, decisionCards: [...(block.decisionCards ?? []), card] }
-        : block,
-    ),
+    decisionCards:
+      at < 0
+        ? [...cards, card]
+        : cards.map((entry, index) => (index === at ? card : entry)),
   };
-}
-
-/** Answers or dismisses a waiting card; a settled one stays as it was. */
-export function settleDecisionCard(
-  session: Session,
-  id: string,
-  outcome: NonNullable<DecisionCard["outcome"]>,
-): Session {
-  let changed = false;
-  const blocks = session.blocks.map((block) => {
-    if (!block.decisionCards?.some((card) => card.id === id && !card.outcome))
-      return block;
-    changed = true;
-    return {
-      ...block,
-      decisionCards: block.decisionCards.map((card) =>
-        card.id === id ? { ...card, outcome } : card,
-      ),
-    };
-  });
-  return changed ? { ...session, blocks } : session;
 }
 
 function restoredStrings(value: unknown): Record<string, string> | undefined {
@@ -246,18 +275,22 @@ function restoredStrings(value: unknown): Record<string, string> | undefined {
   return entries.length ? Object.fromEntries(entries) : undefined;
 }
 
-function restoredOutcome(value: unknown): DecisionCard["outcome"] {
+function restoredOutcome(value: unknown): DecisionOutcome | undefined {
   if (!value || typeof value !== "object") return undefined;
   const outcome = value as Record<string, unknown>;
   const at = typeof outcome.at === "number" ? outcome.at : 0;
   if (outcome.kind === "dismissed") return { kind: "dismissed", at };
   if (outcome.kind !== "answered") return undefined;
   const reply = (outcome.reply ?? {}) as Record<string, unknown>;
-  const answers: Record<string, string[]> = {};
-  if (reply.answers && typeof reply.answers === "object")
-    for (const [key, ids] of Object.entries(reply.answers))
-      if (Array.isArray(ids))
-        answers[key] = ids.filter((id) => typeof id === "string");
+  const answers = Object.fromEntries(
+    Object.entries(
+      reply.answers && typeof reply.answers === "object" ? reply.answers : {},
+    ).flatMap(([key, ids]) =>
+      Array.isArray(ids)
+        ? [[key, ids.filter((id): id is string => typeof id === "string")]]
+        : [],
+    ),
+  );
   const custom = restoredStrings(reply.custom);
   return {
     kind: "answered",
@@ -266,66 +299,65 @@ function restoredOutcome(value: unknown): DecisionCard["outcome"] {
   };
 }
 
-function restoredQuestion(value: unknown): UserQuestion[] {
-  if (!value || typeof value !== "object") return [];
-  const q = value as Record<string, unknown>;
-  if (typeof q.id !== "string" || typeof q.prompt !== "string") return [];
+function restoredQuestion(value: unknown): UserQuestion {
+  const q = (value ?? {}) as Record<string, unknown>;
+  if (typeof q.id !== "string" || typeof q.prompt !== "string")
+    throw new Error("A saved question needs an id and a prompt");
   const options = Array.isArray(q.options)
-    ? q.options.flatMap((entry): UserQuestionOption[] => {
+    ? q.options.map((entry): UserQuestionOption => {
         const o = (entry ?? {}) as Record<string, unknown>;
-        if (typeof o.id !== "string" || typeof o.label !== "string") return [];
-        return [
-          {
-            id: o.id,
-            label: o.label,
-            ...(typeof o.description === "string"
-              ? { description: o.description }
-              : {}),
-            ...(o.recommended === true ? { recommended: true } : {}),
-          },
-        ];
+        if (typeof o.id !== "string" || typeof o.label !== "string")
+          throw new Error("A saved option needs an id and a label");
+        return {
+          id: o.id,
+          label: o.label,
+          ...(typeof o.description === "string"
+            ? { description: o.description }
+            : {}),
+          ...(o.recommended === true ? { recommended: true } : {}),
+        };
       })
     : [];
-  const links = Array.isArray(q.links)
-    ? q.links.filter(
-        (link): link is string =>
-          typeof link === "string" && /^https?:\/\//i.test(link),
-      )
-    : [];
-  return [
-    {
-      id: q.id,
-      ...(typeof q.header === "string" ? { header: q.header } : {}),
-      prompt: q.prompt,
-      multiSelect: q.multiSelect === true,
-      allowCustom: q.allowCustom !== false,
-      options,
-      ...(links.length ? { links } : {}),
-    },
-  ];
+  const links = Array.isArray(q.links) ? q.links.map(webLink) : [];
+  return {
+    id: q.id,
+    ...(typeof q.header === "string" ? { header: q.header } : {}),
+    prompt: q.prompt,
+    multiSelect: q.multiSelect === true,
+    allowCustom: q.allowCustom !== false,
+    exactOptions: true,
+    options,
+    ...(links.length ? { links } : {}),
+  };
 }
 
-/** Decision cards from a saved block, dropping any that no longer make sense. */
-export function restoreDecisionCards(
-  value: unknown,
-): DecisionCard[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const cards = value.flatMap((entry): DecisionCard[] => {
-    if (!entry || typeof entry !== "object") return [];
-    const card = entry as Record<string, unknown>;
-    if (typeof card.id !== "string" || !Array.isArray(card.questions))
-      return [];
-    const questions = card.questions.flatMap(restoredQuestion);
-    if (!questions.length) return [];
+/** A saved card, held to the same rules as a new one, or nothing. */
+export function restoreDecisionCard(value: unknown): DecisionCard | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const card = value as Record<string, unknown>;
+  if (
+    typeof card.id !== "string" ||
+    typeof card.turnId !== "string" ||
+    !Array.isArray(card.questions)
+  )
+    return undefined;
+  try {
+    const questions = checkQuestions(card.questions.map(restoredQuestion));
     const outcome = restoredOutcome(card.outcome);
-    return [
-      {
-        id: card.id,
-        questions,
-        askedAt: typeof card.askedAt === "number" ? card.askedAt : 0,
-        ...(outcome ? { outcome } : {}),
-      },
-    ];
-  });
-  return cards.length ? cards : undefined;
+    return {
+      id: card.id,
+      turnId: card.turnId,
+      questions,
+      askedAt: typeof card.askedAt === "number" ? card.askedAt : 0,
+      ...(outcome ? { outcome } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+export function restoreDecisionCards(value: unknown): DecisionCard[] {
+  return Array.isArray(value)
+    ? value.flatMap((entry) => restoreDecisionCard(entry) ?? [])
+    : [];
 }

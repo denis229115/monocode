@@ -618,12 +618,14 @@ import {
   ARTIFACT_DELETED_EVENT,
 } from "../features/artifacts/artifacts";
 import {
-  decisionAnswerText,
   findDecisionCard,
-  recordDecisionCard,
-  settleDecisionCard,
-  type DecisionCard,
+  withDecisionCard,
 } from "../features/sessions/model/decisionCard";
+import { decisionAnswerer } from "../features/sessions/model/decisionAnswers";
+import {
+  askDecisionCard,
+  settleDecisionCard,
+} from "../features/sessions/data/decisionCards";
 import {
   MonoChangesPanel,
   type MonoChangesRequest,
@@ -10110,46 +10112,33 @@ function Workspace({
 
   /**
    * Sends a decision card's answers as the agent's next message, after any
-   * running turn, and settles the card once the message is accepted.
+   * running turn, then saves the card as answered.
    */
-  const answeringDecisions = useRef(new Set<string>());
+  const answerDecision = useRef(
+    decisionAnswerer({
+      card: (sessionId, cardId) => {
+        const session = sessionsRef.current.find((s) => s.id === sessionId);
+        return session && !session.worktreeRemoved
+          ? findDecisionCard(session, cardId)
+          : undefined;
+      },
+      send: (sessionId, text) =>
+        submitSessionRef.current(sessionId, text, [], {
+          followUpBehavior: "queue",
+        }),
+      settle: settleDecisionCard,
+      show: (sessionId, card) =>
+        setSessions((prev) =>
+          prev.map((s) => (s.id === sessionId ? withDecisionCard(s, card) : s)),
+        ),
+      now: Date.now,
+    }),
+  );
   const onDecisionAnswer = useCallback(
     (sessionId: string, cardId: string, reply: UserQuestionReply) => {
-      const session = sessionsRef.current.find((s) => s.id === sessionId);
-      const card = session && findDecisionCard(session.blocks, cardId);
-      const key = `${sessionId}:${cardId}`;
-      if (
-        !session ||
-        !card ||
-        card.outcome ||
-        session.worktreeRemoved ||
-        answeringDecisions.current.has(key)
-      )
-        return;
-      const settle = (outcome: NonNullable<DecisionCard["outcome"]>) =>
-        setSessions((prev) =>
-          prev.map((s) =>
-            s.id === sessionId ? settleDecisionCard(s, cardId, outcome) : s,
-          ),
-        );
-      if (reply.kind === "skipped") {
-        settle({ kind: "dismissed", at: Date.now() });
-        return;
-      }
-      // A second click while the first answer is being accepted sends nothing.
-      answeringDecisions.current.add(key);
-      void Promise.resolve(
-        submitSessionRef.current(
-          sessionId,
-          decisionAnswerText(card, reply),
-          [],
-          { followUpBehavior: "queue" },
-        ),
-      )
-        .then((accepted) => {
-          if (accepted) settle({ kind: "answered", at: Date.now(), reply });
-        })
-        .finally(() => answeringDecisions.current.delete(key));
+      void answerDecision.current(sessionId, cardId, reply).catch((error) =>
+        console.error("Failed to answer the decision card:", error),
+      );
     },
     [],
   );
@@ -10604,7 +10593,10 @@ function Workspace({
         if (previous) {
           if (previous.signature !== signature)
             throw new Error("Request ID was already used with different input");
-          return previous.promise;
+          // A card can be answered after it was asked, so a retry waits for
+          // the first call and then reads the stored card again.
+          if (payload.action !== "chat.ask") return previous.promise;
+          await previous.promise.catch(() => undefined);
         }
         const sourceMono =
           monoForSession(source.id) ?? findMono(habitRunMono(source.id) ?? "");
@@ -10968,32 +10960,31 @@ function Workspace({
               if (!isHabitRun(sessionId)) await upsertSession(updated);
             },
             askDecision: async (sessionId, card) => {
-              let stored: DecisionCard | undefined;
-              let updated: Session | undefined;
-              flushSync(() =>
-                setSessions((prev) =>
-                  prev.map((session) => {
-                    if (session.id !== sessionId) return session;
-                    stored = findDecisionCard(session.blocks, card.id);
-                    if (stored) return session;
-                    const anchor =
-                      sourceTurnId &&
-                      session.blocks.some((block) => block.id === sourceTurnId)
-                        ? sourceTurnId
-                        : lastUserBlockId(session);
-                    if (!anchor) return session;
-                    stored = card;
-                    updated = recordDecisionCard(session, anchor, card);
-                    return updated;
-                  }),
-                ),
+              const latest = sessionsRef.current.find(
+                (session) => session.id === sessionId,
               );
-              if (!stored)
+              const turnId =
+                latest &&
+                (sourceTurnId &&
+                latest.blocks.some((block) => block.id === sourceTurnId)
+                  ? sourceTurnId
+                  : lastUserBlockId(latest));
+              if (!turnId)
                 throw new Error(
                   "The conversation turn that asked is no longer available",
                 );
-              if (updated && shouldPersistSession(updated))
-                await upsertSession(updated);
+              // Storage finds a retried request ID across the whole history.
+              const stored = await askDecisionCard(sessionId, {
+                ...card,
+                turnId,
+              });
+              setSessions((prev) =>
+                prev.map((session) =>
+                  session.id === sessionId
+                    ? withDecisionCard(session, stored)
+                    : session,
+                ),
+              );
               return stored;
             },
             isMono: (id) => isMonoSession(id),

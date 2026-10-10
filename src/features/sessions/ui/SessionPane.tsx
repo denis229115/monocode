@@ -441,8 +441,8 @@ const LocalSessionPane = memo(function LocalSessionPane({
     [onQuestionReply, session.id],
   );
   const waitingDecisions = useMemo(
-    () => waitingDecisionCards(session.blocks),
-    [session.blocks],
+    () => waitingDecisionCards(session.decisionCards),
+    [session.decisionCards],
   );
   const decisionPanel =
     waitingDecisions.length && onDecisionAnswer ? (
@@ -942,6 +942,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                         : monoTranscript.blocks
                     }
                     historicalBlockIds={monoTranscript.historicalBlockIds}
+                    decisionCards={session.decisionCards}
                     initialTurns={agent ? MONO_PAGE_TURNS : undefined}
                     pageSize={agent ? MONO_PAGE_TURNS : undefined}
                     hasEarlier={monoTranscript.hasEarlier}

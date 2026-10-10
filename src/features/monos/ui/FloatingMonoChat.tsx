@@ -386,8 +386,8 @@ function FloatingConversation({
 }) {
   const transcript = useMonoTranscript(session, true);
   const waitingDecisions = useMemo(
-    () => waitingDecisionCards(session.blocks),
-    [session.blocks],
+    () => waitingDecisionCards(session.decisionCards),
+    [session.decisionCards],
   );
   return (
     <div
@@ -423,6 +423,7 @@ function FloatingConversation({
               : monoPendingTranscriptBlocks(session, transcript.blocks)
           }
           historicalBlockIds={transcript.historicalBlockIds}
+          decisionCards={session.decisionCards}
           initialTurns={MONO_PAGE_TURNS}
           pageSize={MONO_PAGE_TURNS}
           busy={!!session.busy && !transcript.viewingOlderPage}

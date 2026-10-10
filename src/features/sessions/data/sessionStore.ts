@@ -80,6 +80,7 @@ export type SessionSummary = {
 
 type SessionRecord = {
   sidebarHidden?: boolean;
+  decisionCards?: unknown[];
   monoTranscript?: Session["monoTranscript"];
   orchestrationLeadId?: string;
   id: string;
@@ -1007,8 +1008,6 @@ function sanitizeBlock(
     });
     if (cards.length) next.artifactCards = cards;
   }
-  const decisionCards = restoreDecisionCards(block.decisionCards);
-  if (decisionCards) next.decisionCards = decisionCards;
   if (
     block.role === "user" &&
     typeof block.ciContext === "string" &&
@@ -1415,9 +1414,11 @@ function recordToSession(record: SessionRecord): Session {
     : [];
   const linkedWorkItem = sanitizeLinkedWorkItem(record.linkedWorkItem);
   const queuedMessages = sanitizeQueuedMessages(record.queuedMessages);
+  const decisionCards = restoreDecisionCards(record.decisionCards);
   return {
     id: record.id,
     sidebarHidden: record.sidebarHidden === true || undefined,
+    ...(decisionCards.length ? { decisionCards } : {}),
     cwd: record.cwd,
     harness: asHarness(record.harness),
     model: record.model,

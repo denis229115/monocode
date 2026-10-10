@@ -90,20 +90,34 @@ test("waiting decision cards page, answer to the agent that asked, and settle", 
     "Which changes go in the release notes? → Decision cards, Finder paste fix",
   );
 
-  // The other agent's card answers to that agent only.
+  // The Mono's cards answer to the Mono only. Its first card was asked in a
+  // turn outside the loaded history and is answerable all the same.
   const mono = page.locator('[data-pane="mono"] [data-decision-card]');
-  await mono.getByRole("button", { name: /Ship #12/ }).click();
+  await expect(mono).toContainText("Keep the Monday CI check?");
+  await expect(mono.locator("[data-decision-pager]")).toHaveText("Card 1 of 2");
+  await expect(
+    page.locator('[data-pane="mono"] [data-decision-summary="old-habit"]'),
+  ).toHaveCount(0);
+  await proof(page, "older-mono-card", browser);
+  await mono.getByRole("button", { name: /Keep it/ }).click();
   await mono.getByRole("button", { name: "Continue" }).click();
   await expect.poll(async () => (await sent(page))[1]).toEqual({
     sessionId: "mono",
+    text: "Keep the Monday CI check?\nKeep it",
+  });
+  await expect(mono).toContainText("What should I put first?");
+  await mono.getByRole("button", { name: /Ship #12/ }).click();
+  await mono.getByRole("button", { name: "Continue" }).click();
+  await expect.poll(async () => (await sent(page))[2]).toEqual({
+    sessionId: "mono",
     text: "What should I put first?\nShip #12",
   });
-  await expect(page.locator('[data-pane="mono"] [data-decision-card]')).toHaveCount(0);
+  await expect(mono).toHaveCount(0);
 
   // Answer the last card with the recommended option.
   await panel.getByRole("button", { name: /Merge now/ }).click();
   await panel.getByRole("button", { name: "Continue" }).click();
-  await expect.poll(async () => (await sent(page))[2]).toEqual({
+  await expect.poll(async () => (await sent(page))[3]).toEqual({
     sessionId: "session",
     text: "Merge PR #12 now, or wait for the Windows check?\nmerge",
   });
@@ -119,8 +133,14 @@ test("skipping every question dismisses the card without sending", async ({
 }, info) => {
   await page.goto("/tests/browser/decision-cards.html");
   const mono = page.locator('[data-pane="mono"]');
-  await mono.locator("[data-decision-card]").getByRole("button", { name: "Skip" }).click();
-  await expect(mono.locator("[data-decision-card]")).toHaveCount(0);
+  const panel = mono.locator("[data-decision-card]");
+  // The card from older history dismisses like any other.
+  await expect(panel).toContainText("Keep the Monday CI check?");
+  await panel.getByRole("button", { name: "Skip" }).click();
+  await expect(panel).toContainText("What should I put first?");
+  await expect(panel.locator("[data-decision-pager]")).toHaveCount(0);
+  await panel.getByRole("button", { name: "Skip" }).click();
+  await expect(panel).toHaveCount(0);
   await expect(
     mono.locator('[data-decision-summary="focus"]'),
   ).toHaveAttribute("data-status", "dismissed");

@@ -1,13 +1,7 @@
 // @vitest-environment happy-dom
 import { expect, it, vi } from "vitest";
-import { newSession, type Session } from "../../sessions/model/session";
-import {
-  findDecisionCard,
-  recordDecisionCard,
-  settleDecisionCard,
-  waitingDecisionCards,
-  type DecisionCard,
-} from "../../sessions/model/decisionCard";
+import { newSession } from "../../sessions/model/session";
+import type { DecisionCard } from "../../sessions/model/decisionCard";
 import { handleAgentApp, type AgentAppHost } from "./agentApp";
 
 const ask = {
@@ -24,19 +18,24 @@ const ask = {
   ],
 };
 
-/** A host that keeps cards on the session, as the app does. */
+/**
+ * A host whose storage, like the app's, knows every card the session ever
+ * asked, including ones from turns no longer loaded.
+ */
 function fixture(kind: "mono" | "session" | "habit" = "session") {
-  let session: Session = {
+  const source = {
     ...newSession("codex", "/tmp/project", "codex:test"),
     id: "asker",
   };
-  session.blocks = [{ id: "turn", role: "user", text: "Ship it" }];
-  const askDecision = vi.fn((_id: string, card: DecisionCard) => {
-    const existing = findDecisionCard(session.blocks, card.id);
-    if (existing) return existing;
-    session = recordDecisionCard(session, "turn", card);
-    return card;
-  });
+  const storage = new Map<string, DecisionCard>();
+  const askDecision = vi.fn(
+    (_id: string, card: Omit<DecisionCard, "turnId" | "outcome">) => {
+      const existing = storage.get(card.id);
+      if (existing) return existing;
+      storage.set(card.id, { ...card, turnId: "turn" });
+      return storage.get(card.id)!;
+    },
+  );
   const host = {
     isMono: () => kind === "mono",
     isHabitRun: () => kind === "habit",
@@ -44,12 +43,15 @@ function fixture(kind: "mono" | "session" | "habit" = "session") {
     now: () => new Date(1_000),
   } as unknown as AgentAppHost;
   return {
-    source: session,
+    source,
     host,
     askDecision,
-    session: () => session,
+    storage,
     settle: (id: string) => {
-      session = settleDecisionCard(session, id, { kind: "dismissed", at: 2 });
+      storage.set(id, {
+        ...storage.get(id)!,
+        outcome: { kind: "dismissed", at: 2 },
+      });
     },
   };
 }
@@ -57,11 +59,11 @@ function fixture(kind: "mono" | "session" | "habit" = "session") {
 it.each(["session", "mono"] as const)(
   "a %s leaves a waiting card and the call returns without waiting",
   async (kind) => {
-    const { source, host, session } = fixture(kind);
+    const { source, host, storage } = fixture(kind);
     await expect(
       handleAgentApp(source, "ask-1", "chat.ask", ask, host),
     ).resolves.toMatchObject({ cardId: "ask-1", status: "waiting" });
-    const [card] = waitingDecisionCards(session().blocks);
+    const card = storage.get("ask-1")!;
     expect(card).toMatchObject({ id: "ask-1", askedAt: 1_000 });
     expect(card.questions[0]).toMatchObject({
       id: "q1",
@@ -83,13 +85,14 @@ it.each(["session", "mono"] as const)(
   },
 );
 
-it("returns the same card for a repeated request ID instead of posting another", async () => {
-  const { source, host, session, settle } = fixture();
+it("returns the stored card for a repeated request ID, from any point in history", async () => {
+  const { source, host, storage, settle } = fixture();
   await handleAgentApp(source, "ask-1", "chat.ask", ask, host);
   await expect(
     handleAgentApp(source, "ask-1", "chat.ask", ask, host),
   ).resolves.toMatchObject({ cardId: "ask-1", status: "waiting" });
-  expect(session().blocks[0].decisionCards).toHaveLength(1);
+  expect(storage.size).toBe(1);
+  // Answered or dismissed later, a retry reports what is stored now.
   settle("ask-1");
   await expect(
     handleAgentApp(source, "ask-1", "chat.ask", ask, host),
@@ -103,7 +106,23 @@ it("returns the same card for a repeated request ID instead of posting another",
       host,
     ),
   ).rejects.toThrow("already used for another card");
-  expect(session().blocks[0].decisionCards).toHaveLength(1);
+  expect(storage.size).toBe(1);
+});
+
+it("matches a stored card whose keys came back in another order", async () => {
+  const { source, host, storage } = fixture();
+  await handleAgentApp(source, "ask-1", "chat.ask", ask, host);
+  const stored = storage.get("ask-1")!;
+  storage.set("ask-1", JSON.parse(JSON.stringify(stored, Object.keys(stored).sort())));
+  storage.set("ask-1", {
+    ...storage.get("ask-1")!,
+    questions: stored.questions.map((question) =>
+      Object.fromEntries(Object.entries(question).reverse()),
+    ) as DecisionCard["questions"],
+  });
+  await expect(
+    handleAgentApp(source, "ask-1", "chat.ask", ask, host),
+  ).resolves.toMatchObject({ status: "waiting" });
 });
 
 it("keeps habit runs from asking", async () => {
@@ -167,6 +186,11 @@ it.each([
     "at most 9",
   ],
   [{ questions: [{ question: "Q?", multiSelect: "yes" }] }, "true or false"],
+  [{ questions: [{ id: "constructor", question: "Q?" }] }, "reserved name"],
+  [
+    { questions: [{ question: "Q?", options: [{ label: "A", value: "__custom__" }] }] },
+    "__custom__ is reserved",
+  ],
 ])("rejects a card that cannot be answered cleanly: %j", async (input, error) => {
   const { source, host, askDecision } = fixture();
   await expect(

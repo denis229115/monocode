@@ -151,12 +151,12 @@ export type AgentAppHost = {
   /** Puts a card in the Mono's chat, or holds it for a habit run's report. */
   postCard?(sourceSessionId: string, card: MonoCard): void;
   /**
-   * Leaves a decision card on the asking turn, or returns the card a retry of
-   * the same request already left.
+   * Leaves a decision card under the asking turn, or returns the card this
+   * request ID already left anywhere in the session's history.
    */
   askDecision?(
     sourceSessionId: string,
-    card: DecisionCard,
+    card: Omit<DecisionCard, "turnId" | "outcome">,
   ): DecisionCard | Promise<DecisionCard>;
   habits?: {
     load(monoId: string): Promise<Habit[]>;
@@ -986,7 +986,7 @@ export async function handleAgentApp(
     if (!host.askDecision) throw new Error("Decision cards are unavailable");
     if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId))
       throw new Error("Invalid request ID");
-    const card: DecisionCard = {
+    const card = {
       id: requestId,
       questions: parseDecisionQuestions(input.questions),
       askedAt: (host.now?.() ?? new Date()).getTime(),

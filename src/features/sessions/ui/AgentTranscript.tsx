@@ -48,7 +48,10 @@ import { SecondOpinionCard } from "./SecondOpinionCard";
 import { NoteMiniCard } from "../../notes/ui/NoteMiniCard";
 import { ArtifactCard } from "../../artifacts/ui/ArtifactCard";
 import { artifactCards } from "../../artifacts/artifacts";
-import { decisionCards } from "../model/decisionCard";
+import {
+  turnDecisionCards,
+  type DecisionCard,
+} from "../model/decisionCard";
 import { DecisionCardSummary } from "./DecisionCards";
 
 import { TerminalSpinner } from "./TerminalSpinner";
@@ -227,6 +230,8 @@ type Props = {
   onSaveSelectionNote?: (text: string) => void | Promise<void>;
   onOpenFile?: (path: string) => void;
   onOpenArtifact?: (id: string) => void;
+  /** The session's decision cards; each shows under the turn that asked it. */
+  decisionCards?: DecisionCard[];
   onOpenDiff?: (path: string) => void;
   onOpenPlan?: (blockId: string) => void;
   onBuildPlan?: (blockId: string, target?: PlanBuildTarget) => void;
@@ -290,6 +295,7 @@ function AgentTranscriptComponent({
   onSaveSelectionNote,
   onOpenFile,
   onOpenArtifact,
+  decisionCards,
   onOpenDiff,
   onOpenPlan,
   onBuildPlan,
@@ -1009,7 +1015,7 @@ function AgentTranscriptComponent({
           );
           const proposals = turn.filter((block) => block.orchestration);
           const artifacts = artifactCards(turn);
-          const decisions = decisionCards(turn);
+          const decisions = turnDecisionCards(decisionCards, turn);
           // Proposals are turn results, like the changes card. Keep them out
           // of the live work and append them after all of the lead's output.
           const items = turnCache.turnItems(turn, settled, {

@@ -209,6 +209,9 @@ pub struct SessionRecord {
     pub linked_work_item: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub automation_id: Option<String>,
+    /// Waiting decision cards and the latest settled ones; see `decision_cards`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub decision_cards: Vec<Value>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -992,6 +995,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     crate::automations::ensure_tables(conn)?;
     ensure_orchestration_history(conn)?;
     crate::mono_transcript::ensure_tables(conn)?;
+    crate::decision_cards::ensure_table(conn)?;
     Ok(())
 }
 
@@ -1868,6 +1872,7 @@ fn delete_session(conn: &Connection, session_id: &str) -> rusqlite::Result<()> {
         "DELETE FROM orchestration_workers WHERE session_id = ?1 OR lead_id = ?1",
         [session_id],
     )?;
+    crate::decision_cards::delete_for_session(&tx, session_id)?;
     tx.execute("DELETE FROM sessions WHERE id = ?1", [session_id])?;
     tx.commit()
 }
@@ -1980,6 +1985,7 @@ fn get_session_record(
                 linked_work_item: optional_json(row.get(15)?),
                 provider_account_id: row.get(16)?,
                 automation_id: nonempty(row.get(18)?),
+                decision_cards: crate::decision_cards::list(conn, session_id)?,
                 created_at: row.get(9)?,
                 updated_at: row.get(10)?,
             })
