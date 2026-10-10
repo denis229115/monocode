@@ -59,7 +59,7 @@ readline.createInterface({input: process.stdin}).on('line', line => {
   if (request.method === 'model/list') send({id: request.id, result: {data: [{model: 'fixture-model', displayName: 'Fixture model', supportedReasoningEfforts: ['low', 'high']}], nextCursor: null}});
   if (request.method === 'thread/start' || request.method === 'thread/resume') send({id: request.id, result: {thread: {id: 'fixture-thread'}}});
   if (request.method === 'turn/start') {
-    record({codexEffort: request.params.effort ?? null});
+    record({codexEffort: request.params.effort ?? null, codexPrompt: request.params.input?.[0]?.text ?? null});
     send({id: request.id, result: {turn: {id: 'fixture-turn'}}});
     setTimeout(() => {
       send({method: 'item/agentMessage/delta', params: {threadId: 'fixture-thread', turnId: 'fixture-turn', itemId: 'message', delta: 'Headless Codex completed'}});
@@ -336,11 +336,19 @@ describe("existing providers over headless process I/O", () => {
           .trim()
           .split("\n")
           .map((line) => JSON.parse(line));
+        // The first turn also starts a title helper through the same fake
+        // binary, and under load it can log before or after either turn.
+        // Read only the session's own turn: Codex's carries the user's
+        // prompt, and Claude's helper runs without session persistence.
         if (harness === "codex")
-          efforts.push(calls.find((call) => "codexEffort" in call).codexEffort);
+          efforts.push(
+            calls.find((call) => call.codexPrompt === "hello").codexEffort,
+          );
         else {
           const args: string[] = calls.find(
-            (call) => call.claudeArgs,
+            (call) =>
+              call.claudeArgs &&
+              !call.claudeArgs.includes("--no-session-persistence"),
           ).claudeArgs;
           efforts.push(args[args.indexOf("--effort") + 1] ?? null);
         }
