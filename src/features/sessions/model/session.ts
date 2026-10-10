@@ -738,11 +738,58 @@ export function hasPendingApproval(blocks: Block[]): boolean {
   return blocks.some((block) => block.approval && !block.approval.decided);
 }
 
-export function sessionNeedsInput(session: Session): boolean {
+/** The harness is stopped on an approval or question that a quit would lose. */
+export function sessionBlockedOnInput(session: Session): boolean {
   return (
     !session.worktreeRemoved &&
     (hasPendingApproval(session.blocks) || session.pendingQuestion != null)
   );
+}
+
+/** Waiting on the user: blocked, or holding a decision card not yet settled. */
+export function sessionNeedsInput(session: Session): boolean {
+  return (
+    sessionBlockedOnInput(session) ||
+    (!session.worktreeRemoved &&
+      !!session.decisionCards?.some((card) => !card.outcome))
+  );
+}
+
+/**
+ * Sessions to mark as needing input, and the orchestration leads of any that
+ * are. A loaded session answers for itself; `savedWaiting` covers the rest by
+ * their saved cards, as session id to the lead it works for.
+ */
+export function needsInputSessionIds(
+  sessions: readonly Session[],
+  savedWaiting: ReadonlyMap<string, string | undefined> = new Map(),
+): Set<string> {
+  const ids = new Set<string>();
+  const loaded = new Set<string>();
+  for (const session of sessions) {
+    loaded.add(session.id);
+    if (!sessionNeedsInput(session)) continue;
+    ids.add(session.id);
+    if (session.orchestrationLeadId) ids.add(session.orchestrationLeadId);
+  }
+  for (const [id, lead] of savedWaiting) {
+    if (loaded.has(id)) continue;
+    ids.add(id);
+    if (lead) ids.add(lead);
+  }
+  return ids;
+}
+
+/** Chats waiting on the user, loaded or known by a saved card; leads are not
+ * counted for their workers. */
+export function needsInputCount(
+  sessions: readonly Session[],
+  savedWaiting: ReadonlyMap<string, string | undefined> = new Map(),
+): number {
+  const loaded = new Set(sessions.map((session) => session.id));
+  let count = sessions.filter(sessionNeedsInput).length;
+  for (const id of savedWaiting.keys()) if (!loaded.has(id)) count++;
+  return count;
 }
 
 /** The single unsent user turn held by a session, when present. */

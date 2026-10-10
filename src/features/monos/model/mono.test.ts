@@ -7,6 +7,10 @@ import {
   monoState,
 } from "./mono";
 import type { Block } from "../../sessions/model/session";
+import {
+  parseDecisionQuestions,
+  type DecisionCard,
+} from "../../sessions/model/decisionCard";
 
 it("is idle between turns", () => {
   expect(monoState({ blocks: [], busy: false })).toEqual({
@@ -19,6 +23,29 @@ it("needs the user when a provider usage limit stops the conversation", () => {
     .toEqual({ status: "needs-you", activity: "Usage limit reached" });
   expect(monoState({ blocks: [], busy: false, worktreeRemoved: true, usageLimit: {} }))
     .toEqual({ status: "idle" });
+});
+
+it("needs the user while a decision card waits, naming its first question", () => {
+  const card: DecisionCard = {
+    id: "ask",
+    turnId: "t",
+    askedAt: 1,
+    questions: parseDecisionQuestions([
+      { header: "Release", question: "Merge PR #12 now?" },
+      { question: "Tag it?" },
+    ]),
+  };
+  expect(monoState({ blocks: [], busy: false, decisionCards: [card] })).toEqual({
+    status: "needs-you",
+    activity: "Release",
+  });
+  expect(
+    monoState({
+      blocks: [],
+      busy: false,
+      decisionCards: [{ ...card, outcome: { kind: "dismissed", at: 2 } }],
+    }),
+  ).toEqual({ status: "idle" });
 });
 
 it("names the step it is on while working", () => {
