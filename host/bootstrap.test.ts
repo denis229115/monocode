@@ -55,6 +55,9 @@ function fixture(badChecksum = false) {
         const child = spawn("sh", ["-s"], {
           env: {
             ...process.env,
+            // A LANG this machine doesn't have makes perl and tar warn on
+            // stderr; C exists everywhere.
+            LC_ALL: "C",
             PATH: `${bin}:/usr/bin:/bin`,
             MONOCODE_TEST_ARCHIVE: archive,
             MONOCODE_TEST_CHECKSUM: join(dir, "checksum"),
