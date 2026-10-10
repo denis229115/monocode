@@ -497,6 +497,7 @@ pub fn run() {
             decision_cards::decision_card_claim,
             decision_cards::decision_card_release,
             decision_cards::decision_card_waiting_sessions,
+            decision_cards::decision_card_resume,
             mono_transcript::mono_session_page,
             mono_transcript::mono_session_upsert,
             mono_transcript::mono_session_find,

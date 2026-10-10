@@ -248,7 +248,17 @@ pub fn session_upsert(
     }
 
     let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
-    let summary = upsert_session(&conn, &session).map_err(|e| e.to_string())?;
+    save_session(&conn, &session).map_err(|e| e.to_string())
+}
+
+/// Writes a session and settles the decision answers it queues, in one transaction.
+pub(crate) fn save_session(
+    conn: &Connection,
+    session: &SessionUpsert,
+) -> rusqlite::Result<SessionSummary> {
+    let tx = conn.unchecked_transaction()?;
+    let summary = upsert_session(&tx, session)?;
+    tx.commit()?;
     Ok(summary)
 }
 
@@ -1268,6 +1278,7 @@ pub(crate) fn upsert_session(
     )?;
 
     remember_worker_from_blocks(conn, &session.id, &session.blocks)?;
+    crate::decision_cards::mark_queued(conn, &session.id, &session.queued_messages)?;
     Ok(SessionSummary {
         sidebar_hidden: session.sidebar_hidden,
         id: session.id.clone(),
@@ -3728,5 +3739,84 @@ mod tests {
         .unwrap();
         assert!(result.hits.is_empty());
         assert!(!result.truncated);
+    }
+    fn answered_card(conn: &Connection, session_id: &str) {
+        crate::decision_cards::ask(conn, session_id, &json!({"id": "a", "turnId": "b1"})).unwrap();
+        let answer = json!({"kind": "answered", "at": 1, "reply": {"answers": {"q": ["yes"]}}});
+        assert!(
+            crate::decision_cards::claim(conn, session_id, "a", &answer, true)
+                .unwrap()
+                .claimed
+        );
+    }
+
+    #[test]
+    fn a_decision_answer_lost_to_a_quit_is_queued_once_after_restart() {
+        let path = std::env::temp_dir().join(format!(
+            "monocode-decision-restart-{}-{}.db",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        {
+            let store = SessionStore::open(path.clone()).unwrap();
+            let conn = store.lock_conn().unwrap();
+            save_session(&conn, &sample("restart", "/tmp/project", "Ask")).unwrap();
+            answered_card(&conn, "restart");
+            // MonoCode quits before the save that queues the answer.
+        }
+        crate::decision_cards::forget_deliveries("restart");
+        {
+            let store = SessionStore::open(path.clone()).unwrap();
+            let conn = store.lock_conn().unwrap();
+            let record = get_session_record(&conn, "restart", true).unwrap().unwrap();
+            assert_eq!(record.decision_cards[0]["sending"], true);
+            assert!(record.queued_messages.is_empty());
+            // One window takes it up; a second, or a second load, does not.
+            assert!(crate::decision_cards::resume(&conn, "restart", "a").unwrap());
+            assert!(!crate::decision_cards::resume(&conn, "restart", "a").unwrap());
+            let mut session = sample("restart", "/tmp/project", "Ask");
+            session.queued_messages = vec![json!({"id": "decision-a", "text": "Merge?\nyes"})];
+            save_session(&conn, &session).unwrap();
+        }
+        crate::decision_cards::forget_deliveries("restart");
+        {
+            let store = SessionStore::open(path.clone()).unwrap();
+            let conn = store.lock_conn().unwrap();
+            let record = get_session_record(&conn, "restart", true).unwrap().unwrap();
+            assert!(record.decision_cards[0].get("sending").is_none());
+            assert_eq!(record.queued_messages.len(), 1);
+            assert_eq!(record.queued_messages[0]["id"], "decision-a");
+            assert!(!crate::decision_cards::resume(&conn, "restart", "a").unwrap());
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_failed_save_leaves_the_answer_sending_and_the_queue_unchanged() {
+        use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.lock_conn().unwrap();
+        save_session(&conn, &sample("failed", "/tmp/project", "Ask")).unwrap();
+        answered_card(&conn, "failed");
+        conn.authorizer(Some(|ctx: AuthContext<'_>| match ctx.action {
+            AuthAction::Update {
+                table_name: "decision_cards",
+                column_name: "sending",
+            } => Authorization::Deny,
+            _ => Authorization::Allow,
+        }))
+        .unwrap();
+        let mut session = sample("failed", "/tmp/project", "Ask");
+        session.queued_messages = vec![json!({"id": "decision-a", "text": "yes"})];
+        assert!(save_session(&conn, &session).is_err());
+        conn.authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
+            .unwrap();
+        // Neither half landed: the queue is as before and the card still sending.
+        let record = get_session_record(&conn, "failed", true).unwrap().unwrap();
+        assert!(record.queued_messages.is_empty());
+        assert_eq!(record.decision_cards[0]["sending"], true);
     }
 }

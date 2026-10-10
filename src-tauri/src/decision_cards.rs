@@ -1,7 +1,13 @@
 //! Decision cards agents leave in a chat with `app chat.ask`. They live beside
 //! the transcript rather than in it, so a card is found, retried and settled by
 //! its request ID however little of a long conversation is loaded.
-use std::collections::HashSet;
+//!
+//! An answered card is `sending` until the session save that queues its
+//! answer, as the message `decision-<card id>`, clears the flag in the same
+//! transaction. A card still sending when its session loads lost its answer to
+//! a quit or a failed save, so the answer is queued again.
+use std::collections::{BTreeSet, HashSet};
+use std::sync::Mutex;
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
@@ -12,6 +18,20 @@ use crate::session_store::{self, SessionStore};
 
 const MAX_CARD_BYTES: usize = 64 * 1024;
 
+/// The queued message that carries a card's answer.
+const ANSWER_PREFIX: &str = "decision-";
+
+/// Answers this app has taken up. Held only in memory, so after a restart
+/// every card still sending can be taken up again, but only once. An entry
+/// outlives its card's sending flag harmlessly, since `resume` checks the flag.
+static DELIVERING: Mutex<BTreeSet<(String, String)>> = Mutex::new(BTreeSet::new());
+
+fn delivering() -> std::sync::MutexGuard<'static, BTreeSet<(String, String)>> {
+    DELIVERING
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 pub(crate) fn ensure_table(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS decision_cards (
@@ -21,22 +41,51 @@ pub(crate) fn ensure_table(conn: &Connection) -> rusqlite::Result<()> {
            waiting INTEGER NOT NULL,
            PRIMARY KEY (session_id, card_id)
          );",
-    )
+    )?;
+    let has_sending: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('decision_cards') WHERE name = 'sending'",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_sending == 0 {
+        conn.execute(
+            "ALTER TABLE decision_cards ADD COLUMN sending INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    Ok(())
 }
 
 fn invalid(message: &str) -> rusqlite::Error {
     rusqlite::Error::InvalidParameterName(message.into())
 }
 
-fn stored(conn: &Connection, session_id: &str, card_id: &str) -> rusqlite::Result<Option<Value>> {
-    let raw: Option<String> = conn
+/// The card as saved, without its sending flag, and the flag.
+fn saved(
+    conn: &Connection,
+    session_id: &str,
+    card_id: &str,
+) -> rusqlite::Result<Option<(Value, bool)>> {
+    let row: Option<(String, bool)> = conn
         .query_row(
-            "SELECT card_json FROM decision_cards WHERE session_id = ?1 AND card_id = ?2",
+            "SELECT card_json, sending FROM decision_cards WHERE session_id = ?1 AND card_id = ?2",
             params![session_id, card_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?;
-    Ok(raw.and_then(|raw| serde_json::from_str(&raw).ok()))
+    Ok(row.and_then(|(raw, sending)| Some((serde_json::from_str(&raw).ok()?, sending))))
+}
+
+/// The card as callers see it: `sending` while its answer is not yet queued.
+fn shown(mut card: Value, sending: bool) -> Value {
+    if sending {
+        card["sending"] = Value::Bool(true);
+    }
+    card
+}
+
+fn stored(conn: &Connection, session_id: &str, card_id: &str) -> rusqlite::Result<Option<Value>> {
+    Ok(saved(conn, session_id, card_id)?.map(|(card, sending)| shown(card, sending)))
 }
 
 /// Saves the card unless its request ID already named one, and returns the
@@ -61,19 +110,21 @@ pub(crate) fn ask(conn: &Connection, session_id: &str, card: &Value) -> rusqlite
 #[serde(rename_all = "camelCase")]
 pub struct Claim {
     card: Option<Value>,
-    claimed: bool,
+    pub(crate) claimed: bool,
 }
 
 /// Settles a waiting card with the first outcome to arrive, from any window.
 /// Only the caller that claims it may send its answer; later claims change
-/// nothing and learn the stored outcome.
+/// nothing and learn the stored outcome. With `sending`, the card stays
+/// sending until a session save queues its answer.
 pub(crate) fn claim(
     conn: &Connection,
     session_id: &str,
     card_id: &str,
     outcome: &Value,
+    sending: bool,
 ) -> rusqlite::Result<Claim> {
-    let Some(mut card) = stored(conn, session_id, card_id)? else {
+    let Some((mut card, was_sending)) = saved(conn, session_id, card_id)? else {
         return Ok(Claim {
             card: None,
             claimed: false,
@@ -81,19 +132,49 @@ pub(crate) fn claim(
     };
     if card.get("outcome").is_some() {
         return Ok(Claim {
-            card: Some(card),
+            card: Some(shown(card, was_sending)),
             claimed: false,
         });
     }
     card["outcome"] = outcome.clone();
     let changed = conn.execute(
-        "UPDATE decision_cards SET card_json = ?3, waiting = 0 WHERE session_id = ?1 AND card_id = ?2 AND waiting = 1",
-        params![session_id, card_id, card.to_string()],
+        "UPDATE decision_cards SET card_json = ?3, waiting = 0, sending = ?4 WHERE session_id = ?1 AND card_id = ?2 AND waiting = 1",
+        params![session_id, card_id, card.to_string(), sending],
     )?;
+    if changed == 1 && sending {
+        delivering().insert((session_id.to_owned(), card_id.to_owned()));
+    }
     Ok(Claim {
         card: stored(conn, session_id, card_id)?,
         claimed: changed == 1,
     })
+}
+
+/// Takes up a card still sending whose answer no one in this app is queuing,
+/// as after a restart. Only the first caller gets it.
+pub(crate) fn resume(conn: &Connection, session_id: &str, card_id: &str) -> rusqlite::Result<bool> {
+    let sending = saved(conn, session_id, card_id)?.is_some_and(|(_, sending)| sending);
+    Ok(sending && delivering().insert((session_id.to_owned(), card_id.to_owned())))
+}
+
+/// Clears `sending` on every card whose answer is among the session's queued
+/// messages. Runs inside the session save, so the answer and the cleared flag
+/// are written together or not at all.
+pub(crate) fn mark_queued(
+    conn: &Connection,
+    session_id: &str,
+    queued_messages: &[Value],
+) -> rusqlite::Result<()> {
+    for card_id in queued_messages
+        .iter()
+        .filter_map(|message| message["id"].as_str()?.strip_prefix(ANSWER_PREFIX))
+    {
+        conn.execute(
+            "UPDATE decision_cards SET sending = 0 WHERE session_id = ?1 AND card_id = ?2 AND sending = 1",
+            params![session_id, card_id],
+        )?;
+    }
+    Ok(())
 }
 
 /// Gives back a claim whose answer could not be sent, so the card waits again.
@@ -104,24 +185,25 @@ pub(crate) fn release(
     card_id: &str,
     outcome: &Value,
 ) -> rusqlite::Result<Option<Value>> {
-    let Some(mut card) = stored(conn, session_id, card_id)? else {
+    let Some((mut card, _)) = saved(conn, session_id, card_id)? else {
         return Ok(None);
     };
     if card.get("outcome") != Some(outcome) {
-        return Ok(Some(card));
+        return stored(conn, session_id, card_id);
     }
     if let Some(fields) = card.as_object_mut() {
         fields.remove("outcome");
     }
     conn.execute(
-        "UPDATE decision_cards SET card_json = ?3, waiting = 1 WHERE session_id = ?1 AND card_id = ?2",
+        "UPDATE decision_cards SET card_json = ?3, waiting = 1, sending = 0 WHERE session_id = ?1 AND card_id = ?2",
         params![session_id, card_id, card.to_string()],
     )?;
+    delivering().remove(&(session_id.to_owned(), card_id.to_owned()));
     stored(conn, session_id, card_id)
 }
 
 /// The cards asked in the given turns, in the order they were asked, and with
-/// `waiting` every waiting card too, wherever its turn is.
+/// `waiting` every waiting or sending card too, wherever its turn is.
 pub(crate) fn list(
     conn: &Connection,
     session_id: &str,
@@ -129,19 +211,23 @@ pub(crate) fn list(
     waiting: bool,
 ) -> rusqlite::Result<Vec<Value>> {
     let mut statement = conn.prepare(
-        "SELECT card_json, waiting FROM decision_cards WHERE session_id = ?1 ORDER BY rowid",
+        "SELECT card_json, waiting, sending FROM decision_cards WHERE session_id = ?1 ORDER BY rowid",
     )?;
     let rows = statement.query_map([session_id], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?))
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, bool>(1)?,
+            row.get::<_, bool>(2)?,
+        ))
     })?;
     Ok(rows
         .filter_map(|row| row.ok())
-        .filter_map(|(raw, is_waiting)| {
+        .filter_map(|(raw, is_waiting, sending)| {
             let card: Value = serde_json::from_str(&raw).ok()?;
             let in_turn = card["turnId"]
                 .as_str()
                 .is_some_and(|turn| turns.contains(turn));
-            (in_turn || (waiting && is_waiting)).then_some(card)
+            (in_turn || (waiting && (is_waiting || sending))).then(|| shown(card, sending))
         })
         .collect())
 }
@@ -152,6 +238,12 @@ pub(crate) fn block_ids(blocks: &[Value]) -> HashSet<&str> {
         .iter()
         .filter_map(|block| block["id"].as_str())
         .collect()
+}
+
+/// What quitting does to the answers this app was queuing.
+#[cfg(test)]
+pub(crate) fn forget_deliveries(session_id: &str) {
+    delivering().retain(|(session, _)| session != session_id);
 }
 
 pub(crate) fn delete_for_session(conn: &Connection, session_id: &str) -> rusqlite::Result<()> {
@@ -216,10 +308,22 @@ pub fn decision_card_claim(
     session_id: String,
     card_id: String,
     outcome: Value,
+    sending: bool,
 ) -> Result<Claim, String> {
     ids(&session_id, &card_id)?;
     let conn = store.lock_conn()?;
-    claim(&conn, &session_id, &card_id, &outcome).map_err(|e| e.to_string())
+    claim(&conn, &session_id, &card_id, &outcome, sending).map_err(|e| e.to_string())
+}
+
+#[tauri::command(async)]
+pub fn decision_card_resume(
+    store: State<'_, SessionStore>,
+    session_id: String,
+    card_id: String,
+) -> Result<bool, String> {
+    ids(&session_id, &card_id)?;
+    let conn = store.lock_conn()?;
+    resume(&conn, &session_id, &card_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command(async)]
@@ -267,10 +371,16 @@ mod tests {
         assert_eq!(ask(&conn, "s", &first).unwrap(), first);
         let other = json!({"id": "ask-1", "turnId": "t9", "questions": [{"prompt": "Other?"}]});
         assert_eq!(ask(&conn, "s", &other).unwrap(), first);
-        let dismissed = claim(&conn, "s", "ask-1", &json!({"kind": "dismissed", "at": 2}))
-            .unwrap()
-            .card
-            .unwrap();
+        let dismissed = claim(
+            &conn,
+            "s",
+            "ask-1",
+            &json!({"kind": "dismissed", "at": 2}),
+            false,
+        )
+        .unwrap()
+        .card
+        .unwrap();
         assert_eq!(dismissed["outcome"]["kind"], "dismissed");
         assert_eq!(ask(&conn, "s", &first).unwrap(), dismissed);
         // The same request ID in another session is its own card.
@@ -283,12 +393,12 @@ mod tests {
         ask(&conn, "s", &json!({"id": "a", "turnId": "t"})).unwrap();
         let yes = json!({"kind": "answered", "at": 1, "reply": {"answers": {"q1": ["yes"]}}});
         let no = json!({"kind": "answered", "at": 1, "reply": {"answers": {"q1": ["no"]}}});
-        let first = claim(&conn, "s", "a", &yes).unwrap();
+        let first = claim(&conn, "s", "a", &yes, false).unwrap();
         assert!(first.claimed);
-        let second = claim(&conn, "s", "a", &no).unwrap();
+        let second = claim(&conn, "s", "a", &no, false).unwrap();
         assert!(!second.claimed);
         assert_eq!(second.card.unwrap()["outcome"], yes);
-        assert!(!claim(&conn, "s", "missing", &yes).unwrap().claimed);
+        assert!(!claim(&conn, "s", "missing", &yes, false).unwrap().claimed);
     }
 
     #[test]
@@ -297,7 +407,7 @@ mod tests {
         ask(&conn, "s", &json!({"id": "a", "turnId": "t"})).unwrap();
         let yes = json!({"kind": "answered", "at": 1});
         let no = json!({"kind": "answered", "at": 2});
-        claim(&conn, "s", "a", &yes).unwrap();
+        claim(&conn, "s", "a", &yes, false).unwrap();
         // Someone else's outcome stays.
         assert_eq!(
             release(&conn, "s", "a", &no).unwrap().unwrap()["outcome"],
@@ -307,7 +417,88 @@ mod tests {
         assert!(released.get("outcome").is_none());
         let loaded = list(&conn, "s", &HashSet::new(), true).unwrap();
         assert_eq!(ids(&loaded), ["a"]);
-        assert!(claim(&conn, "s", "a", &no).unwrap().claimed);
+        assert!(claim(&conn, "s", "a", &no, false).unwrap().claimed);
+    }
+
+    #[test]
+    fn an_answer_stays_sending_until_a_save_queues_it() {
+        let conn = conn();
+        ask(&conn, "sending", &json!({"id": "a", "turnId": "t"})).unwrap();
+        let yes = json!({"kind": "answered", "at": 1});
+        let claimed = claim(&conn, "sending", "a", &yes, true).unwrap();
+        assert!(claimed.claimed);
+        assert_eq!(claimed.card.unwrap()["sending"], true);
+        // It loads with the session wherever its turn is, still sending.
+        let loaded = list(&conn, "sending", &HashSet::new(), true).unwrap();
+        assert_eq!(ids(&loaded), ["a"]);
+        assert_eq!(loaded[0]["sending"], true);
+        // The flag is kept beside the card, never inside it.
+        let raw: String = conn
+            .query_row("SELECT card_json FROM decision_cards", [], |row| row.get(0))
+            .unwrap();
+        assert!(!raw.contains("sending"));
+        // The window answering it is queuing it; no one else takes it up.
+        assert!(!resume(&conn, "sending", "a").unwrap());
+        mark_queued(
+            &conn,
+            "sending",
+            &[json!({"id": "decision-b"}), json!({"id": "a"})],
+        )
+        .unwrap();
+        assert_eq!(
+            stored(&conn, "sending", "a").unwrap().unwrap()["sending"],
+            true
+        );
+        mark_queued(&conn, "sending", &[json!({"id": "decision-a"})]).unwrap();
+        let queued = stored(&conn, "sending", "a").unwrap().unwrap();
+        assert!(queued.get("sending").is_none());
+        assert_eq!(queued["outcome"], yes);
+        assert!(list(&conn, "sending", &HashSet::new(), true)
+            .unwrap()
+            .is_empty());
+        assert!(!resume(&conn, "sending", "a").unwrap());
+    }
+
+    #[test]
+    fn an_answer_that_could_not_be_queued_waits_again() {
+        let conn = conn();
+        ask(&conn, "given-back", &json!({"id": "a", "turnId": "t"})).unwrap();
+        let yes = json!({"kind": "answered", "at": 1});
+        claim(&conn, "given-back", "a", &yes, true).unwrap();
+        let waiting = release(&conn, "given-back", "a", &yes).unwrap().unwrap();
+        assert!(waiting.get("outcome").is_none());
+        assert!(waiting.get("sending").is_none());
+        assert!(!resume(&conn, "given-back", "a").unwrap());
+        // A dismissal sends nothing, so nothing is left sending.
+        let dismissed = claim(
+            &conn,
+            "given-back",
+            "a",
+            &json!({"kind": "dismissed"}),
+            false,
+        )
+        .unwrap()
+        .card
+        .unwrap();
+        assert!(dismissed.get("sending").is_none());
+    }
+
+    #[test]
+    fn after_a_quit_only_one_caller_takes_up_a_sending_answer() {
+        let conn = conn();
+        ask(&conn, "quit", &json!({"id": "a", "turnId": "t"})).unwrap();
+        claim(
+            &conn,
+            "quit",
+            "a",
+            &json!({"kind": "answered", "at": 1}),
+            true,
+        )
+        .unwrap();
+        forget_deliveries("quit");
+        assert!(resume(&conn, "quit", "a").unwrap());
+        assert!(!resume(&conn, "quit", "a").unwrap());
+        assert!(!resume(&conn, "quit", "missing").unwrap());
     }
 
     #[test]
@@ -332,8 +523,8 @@ mod tests {
         ] {
             ask(&conn, session, &json!({"id": card, "turnId": "t"})).unwrap();
         }
-        claim(&conn, "settled", "a", &json!({"kind": "dismissed"})).unwrap();
-        claim(&conn, "both", "a", &json!({"kind": "dismissed"})).unwrap();
+        claim(&conn, "settled", "a", &json!({"kind": "dismissed"}), false).unwrap();
+        claim(&conn, "both", "a", &json!({"kind": "dismissed"}), false).unwrap();
         let waiting = |id: &str, lead: Option<&str>| WaitingSession {
             session_id: id.into(),
             lead_id: lead.map(Into::into),
@@ -353,7 +544,15 @@ mod tests {
             [],
         )
         .unwrap();
-        claim(&conn, "both", "b", &json!({"kind": "answered", "at": 1})).unwrap();
+        // An answer still sending is no longer waiting either.
+        claim(
+            &conn,
+            "both",
+            "b",
+            &json!({"kind": "answered", "at": 1}),
+            true,
+        )
+        .unwrap();
         assert_eq!(
             waiting_sessions(&conn).unwrap(),
             [waiting("waiting", None), waiting("worker", Some("lead"))]
@@ -373,7 +572,7 @@ mod tests {
                 &json!({ "id": id, "turnId": format!("t-{index}") }),
             )
             .unwrap();
-            claim(&conn, "s", &id, &json!({"kind": "dismissed"})).unwrap();
+            claim(&conn, "s", &id, &json!({"kind": "dismissed"}), false).unwrap();
         }
         ask(&conn, "s", &json!({"id": "new-waiting", "turnId": "t-999"})).unwrap();
         let turns: Vec<String> = (0..250).map(|index| format!("t-{index}")).collect();
