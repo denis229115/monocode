@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  acceptDecisionAnswer,
   decisionAnswerer,
+  keepDecisionAnswer,
+  returnDecisionAnswer,
   withDecisionAnswer,
   withoutDecisionAnswer,
   type DecisionAnswerHost,
@@ -10,7 +13,13 @@ import {
   type DecisionCard,
   type DecisionOutcome,
 } from "./decisionCard";
-import { canDispatchQueuedHead } from "./messageQueue";
+import {
+  canDispatchQueuedHead,
+  canRemoveQueuedMessage,
+  canSteerQueuedHead,
+  dequeueQueuedMessage,
+  queuedMessageForSubmit,
+} from "./messageQueue";
 import { newSession, type Session } from "./session";
 
 const asked: DecisionCard = {
@@ -60,7 +69,9 @@ function store() {
       return true;
     }),
     release: vi.fn(async (_s: string, _id: string, outcome: DecisionOutcome) => {
-      if (card.outcome === outcome) card = asked;
+      // An answer another save already queued keeps its card answered.
+      if (card.outcome === outcome && !savedQueue.includes(`decision-${card.id}`))
+        card = asked;
       delivering = false;
       return card;
     }),
@@ -96,6 +107,10 @@ function window(
     claim: shared.claim,
     resume: shared.resume,
     release: shared.release,
+    restore: vi.fn((_s, id, text) => {
+      if (!queue.some((message) => message.id === id))
+        queue = [...queue, { id, text }];
+    }),
     queue: vi.fn(async (_s, id, text) => {
       if (!queue.some((message) => message.id === id))
         queue = [...queue, { id, text }];
@@ -244,6 +259,47 @@ describe("answering a decision card", () => {
     expect(later.host.queue).not.toHaveBeenCalled();
   });
 
+  it("keeps the answer when another save already queued it before this one failed", async () => {
+    const shared = store();
+    const { answer, seen, queue } = window(shared, (ids) => {
+      // A routine save carrying the answer lands; this window's own fails.
+      shared.save(ids);
+      throw new Error("disk full");
+    });
+    await answer("mono", "old", reply("yes"));
+    expect(shared.stored().outcome?.kind).toBe("answered");
+    expect(seen().outcome?.kind).toBe("answered");
+    expect(queue()).toEqual([{ id: "decision-old", text: "Merge now?\nyes" }]);
+  });
+
+  it("tries again to take up a sending answer after a failed attempt, a few times", async () => {
+    const shared = store();
+    const before = window(shared, () => new Promise<void>(() => {}));
+    void before.answer("mono", "old", reply("yes"));
+    await vi.waitFor(() => expect(before.host.queue).toHaveBeenCalled());
+    shared.quit();
+    const after = window(shared);
+    shared.resume.mockRejectedValueOnce(new Error("store is locked"));
+    await expect(after.resume("mono", "old")).rejects.toThrow("locked");
+    expect(after.queue()).toEqual([]);
+    await after.resume("mono", "old");
+    expect(after.queue().map((message) => message.id)).toEqual([
+      "decision-old",
+    ]);
+
+    // Failures stop being retried after a few.
+    const stuck = store();
+    const first = window(stuck, () => new Promise<void>(() => {}));
+    void first.answer("mono", "old", reply("yes"));
+    await vi.waitFor(() => expect(first.host.queue).toHaveBeenCalled());
+    stuck.quit();
+    const next = window(stuck);
+    stuck.resume.mockRejectedValue(new Error("store is locked"));
+    for (let attempt = 0; attempt < 5; attempt++)
+      await next.resume("mono", "old").catch(() => undefined);
+    expect(stuck.resume).toHaveBeenCalledTimes(3);
+  });
+
   it("dismisses a card whose questions were all skipped, without queuing", async () => {
     const shared = store();
     const { host, answer } = window(shared);
@@ -296,6 +352,29 @@ describe("queuing a decision answer", () => {
     expect(paused.queueStatus).toBe("paused");
   });
 
+  it("never sends an answer still saving, by Steer or dispatch", () => {
+    const queued = withDecisionAnswer(chat(), "decision-old", "yes");
+    expect(queuedMessageForSubmit(queued, "decision-old", "steer")).toBe(
+      undefined,
+    );
+    expect(queuedMessageForSubmit(queued, "decision-old", "dispatch")).toBe(
+      undefined,
+    );
+    const { sending: _, ...sent } = sending;
+    const saved = { ...queued, decisionCards: [sent] };
+    expect(queuedMessageForSubmit(saved, "decision-old", "steer")?.id).toBe(
+      "decision-old",
+    );
+  });
+
+  it("cannot be removed from the queue", () => {
+    const queued = withDecisionAnswer(chat(), "decision-old", "yes");
+    expect(canRemoveQueuedMessage(queued.queuedMessages![0])).toBe(false);
+    expect(
+      canRemoveQueuedMessage({ id: "other", text: "hi", attachments: [] }),
+    ).toBe(true);
+  });
+
   it("queues an answer once and takes it back with its bubble", () => {
     const once = withDecisionAnswer(
       withDecisionAnswer(chat(), "decision-old", "yes"),
@@ -310,5 +389,103 @@ describe("queuing a decision answer", () => {
     );
     expect(back.queuedMessages).toBeUndefined();
     expect(back.blocks.some((block) => block.id === "decision-old")).toBe(false);
+  });
+});
+
+describe("sending a queued decision answer to the agent", () => {
+  const { sending: _, ...sentCard } = {
+    ...asked,
+    outcome: { kind: "answered" as const, at: 1, reply: reply("yes") },
+    sending: true as const,
+  };
+  const queued = (): Session =>
+    withDecisionAnswer(
+      {
+        ...newSession("claude", "/tmp/project"),
+        decisionCards: [sentCard],
+        blocks: [{ id: "u0", role: "user", text: "Ship it?" }],
+      },
+      "decision-old",
+      "Merge now?\nyes",
+    );
+  /** What starting the turn does: the answer leaves the queue as a message. */
+  const launch = (session: Session): Session =>
+    keepDecisionAnswer(
+      session,
+      {
+        ...dequeueQueuedMessage(session, "decision-old"),
+        busy: true,
+        blocks: [
+          ...session.blocks,
+          { id: "random", role: "user", text: "Merge now?\nyes" },
+        ],
+      },
+      "decision-old",
+    );
+
+  it("stays queued until the provider takes it, then leaves", () => {
+    const sending = launch(queued());
+    expect(sending.queuedMessages?.[0]).toMatchObject({
+      id: "decision-old",
+      delivering: true,
+    });
+    expect(sending.blocks.at(-1)?.id).toBe("decision-old");
+    // Nothing sends it twice while it is on its way.
+    expect(canDispatchQueuedHead({ ...sending, busy: false })).toBe(false);
+    expect(canSteerQueuedHead({ ...sending, turnReady: true })).toBe(false);
+    expect(queuedMessageForSubmit(sending, "decision-old", "steer")).toBe(
+      undefined,
+    );
+    const taken = acceptDecisionAnswer(sending, "decision-old");
+    expect(taken.queuedMessages).toBeUndefined();
+    expect(taken.blocks.at(-1)?.id).toBe("decision-old");
+  });
+
+  it("goes back to the queue, paused, when the launch fails", () => {
+    const failed = returnDecisionAnswer(
+      launch(queued()),
+      "decision-old",
+      "claude is not connected yet.",
+    );
+    expect(failed.queuedMessages).toEqual([
+      {
+        id: "decision-old",
+        text: "Merge now?\nyes",
+        attachments: [],
+        error: "claude is not connected yet.",
+      },
+    ]);
+    expect(failed.queueStatus).toBe("paused");
+    expect(failed.blocks.map((block) => block.id)).toEqual(["u0"]);
+    // Once the provider took it, a late failure changes nothing.
+    const taken = acceptDecisionAnswer(launch(queued()), "decision-old");
+    expect(returnDecisionAnswer(taken, "decision-old", "late")).toBe(taken);
+  });
+
+  it("replaces the message of an attempt a quit cut short", () => {
+    // Saved mid-launch: the attempt's message and the queued answer.
+    const { delivering: _, ...saved } = launch(queued()).queuedMessages![0];
+    const restarted: Session = {
+      ...launch(queued()),
+      queuedMessages: [saved],
+      busy: false,
+    };
+    const again = launch(restarted);
+    expect(
+      again.blocks.filter((block) => block.id === "decision-old"),
+    ).toHaveLength(1);
+    expect(again.blocks.map((block) => block.id)).toEqual([
+      "u0",
+      "decision-old",
+    ]);
+  });
+
+  it("leaves other queued messages to the existing flow", () => {
+    const plain = {
+      ...newSession("claude", "/tmp/project"),
+      queuedMessages: [{ id: "m1", text: "hi", attachments: [] }],
+    };
+    const launched = { ...dequeueQueuedMessage(plain, "m1"), busy: true };
+    expect(keepDecisionAnswer(plain, launched, "m1")).toBe(launched);
   });
 });

@@ -229,20 +229,29 @@ export function decisionAnswerText(
     .join("\n\n");
 }
 
+const ANSWER_PREFIX = "decision-";
+
 /** The queued message carrying a card's answer; storage matches the two. */
 export function decisionAnswerId(cardId: string): string {
-  return `decision-${cardId}`;
+  return `${ANSWER_PREFIX}${cardId}`;
 }
 
-/** True while the next queued message is an answer its card is still saving. */
+export function isDecisionAnswerId(messageId: string): boolean {
+  return messageId.startsWith(ANSWER_PREFIX);
+}
+
+/**
+ * True while a queued message, the next one by default, is an answer its card
+ * is still saving.
+ */
 export function isUnsavedDecisionAnswer(
   session: Pick<Session, "decisionCards" | "queuedMessages">,
+  messageId = session.queuedMessages?.[0]?.id,
 ): boolean {
-  const head = session.queuedMessages?.[0];
   return !!(
-    head &&
+    messageId &&
     session.decisionCards?.some(
-      (card) => card.sending && decisionAnswerId(card.id) === head.id,
+      (card) => card.sending && decisionAnswerId(card.id) === messageId,
     )
   );
 }

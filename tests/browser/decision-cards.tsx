@@ -239,6 +239,7 @@ function Fixture() {
         return { card: stored.get(key), claimed: true };
       },
       resume: async () => false,
+      restore: () => {},
       release: async (sessionId, cardId, outcome) => {
         const key = `${sessionId}:${cardId}`;
         const card = stored.get(key);

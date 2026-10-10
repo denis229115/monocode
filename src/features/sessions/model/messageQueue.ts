@@ -1,4 +1,4 @@
-import { isUnsavedDecisionAnswer } from "./decisionCard";
+import { isDecisionAnswerId, isUnsavedDecisionAnswer } from "./decisionCard";
 import { isPreparingHandoff } from "./handoff";
 import type { QueuedMessage, Session } from "./session";
 
@@ -46,7 +46,7 @@ export function canDispatchQueuedHead(session: Session): boolean {
   if (!head) return false;
   if (isEditingQueuedHead(session)) return false;
   if (isPreparingHandoff(session)) return false;
-  if (isUnsavedDecisionAnswer(session)) return false;
+  if (isUnsavedDecisionAnswer(session) || head.delivering) return false;
   return true;
 }
 
@@ -56,6 +56,7 @@ export function canSteerQueuedHead(session: Session): boolean {
   return (
     !!head &&
     !head.monoSessionCompletion &&
+    !head.delivering &&
     !!session.busy &&
     !!session.turnReady &&
     !session.worktreePreparing &&
@@ -85,8 +86,18 @@ export function queuedMessageForSubmit(
     (entry) => entry.id === messageId,
   );
   if (!message) return undefined;
+  if (message.delivering || isUnsavedDecisionAnswer(session, messageId))
+    return undefined;
   if (mode === "steer") return message.monoSessionCompletion ? undefined : message;
   if (queuedHead(session)?.id !== messageId) return undefined;
   if (!canDispatchQueuedHead(session)) return undefined;
   return message;
+}
+
+/**
+ * A decision answer stays queued until it reaches the agent: removing it would
+ * leave its card answered with nothing sent.
+ */
+export function canRemoveQueuedMessage(message: QueuedMessage): boolean {
+  return !isDecisionAnswerId(message.id);
 }

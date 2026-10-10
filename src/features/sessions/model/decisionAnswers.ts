@@ -3,6 +3,7 @@ import { isMonoSession } from "../../monos/model/mono";
 import {
   decisionAnswerId,
   decisionAnswerText,
+  isDecisionAnswerId,
   type DecisionCard,
   type DecisionOutcome,
 } from "./decisionCard";
@@ -30,7 +31,10 @@ export type DecisionAnswerHost = {
   ): Promise<{ card?: DecisionCard; claimed: boolean }>;
   /** Takes up a card still sending that no one is queuing; first caller only. */
   resume(sessionId: string, cardId: string): Promise<boolean>;
-  /** Puts a claimed card back to waiting, when its answer could not be queued. */
+  /**
+   * Puts a claimed card back to waiting, when its answer could not be queued.
+   * A card whose answer another save already queued comes back answered.
+   */
   release(
     sessionId: string,
     cardId: string,
@@ -41,6 +45,8 @@ export type DecisionAnswerHost = {
    * the session; false, with the message taken back out, when it could not.
    */
   queue(sessionId: string, messageId: string, text: string): Promise<boolean>;
+  /** Puts back in this window's queue an answer storage already holds. */
+  restore(sessionId: string, messageId: string, text: string): void;
   /** Shows the stored card in the session. */
   show(sessionId: string, card: DecisionCard): void;
   now(): number;
@@ -55,28 +61,32 @@ export type DecisionAnswerHost = {
  * waits again. A card still sending after a restart is queued again by
  * `resume`. Skipping dismisses without sending.
  */
+const MAX_RESUME_FAILURES = 3;
+
 export function decisionAnswerer(host: DecisionAnswerHost) {
   const answering = new Set<string>();
+  /** Cards this window took up, or found another caller holding. */
   const resumed = new Set<string>();
+  /** Failed attempts to take a card up, retried a few times. */
+  const failures = new Map<string, number>();
 
   const deliver = async (
     sessionId: string,
     card: DecisionCard,
     outcome: Answered,
   ) => {
+    const messageId = decisionAnswerId(card.id);
+    const text = decisionAnswerText(card, outcome.reply);
     let queued = false;
     try {
-      queued = await host.queue(
-        sessionId,
-        decisionAnswerId(card.id),
-        decisionAnswerText(card, outcome.reply),
-      );
+      queued = await host.queue(sessionId, messageId, text);
     } finally {
       if (queued) {
         host.show(sessionId, { ...card, outcome, sending: undefined });
       } else {
-        const waiting = await host.release(sessionId, card.id, outcome);
-        if (waiting) host.show(sessionId, waiting);
+        const after = await host.release(sessionId, card.id, outcome);
+        if (after) host.show(sessionId, after);
+        if (after?.outcome) host.restore(sessionId, messageId, text);
       }
     }
   };
@@ -123,14 +133,21 @@ export function decisionAnswerer(host: DecisionAnswerHost) {
       !card?.sending ||
       card.outcome?.kind !== "answered" ||
       answering.has(key) ||
-      resumed.has(key)
+      resumed.has(key) ||
+      (failures.get(key) ?? 0) >= MAX_RESUME_FAILURES
     )
       return;
-    resumed.add(key);
     answering.add(key);
     try {
-      if (await host.resume(sessionId, cardId))
-        await deliver(sessionId, card, card.outcome);
+      let taken: boolean;
+      try {
+        taken = await host.resume(sessionId, cardId);
+      } catch (error) {
+        failures.set(key, (failures.get(key) ?? 0) + 1);
+        throw error;
+      }
+      resumed.add(key);
+      if (taken) await deliver(sessionId, card, card.outcome);
     } finally {
       answering.delete(key);
     }
@@ -168,4 +185,82 @@ export function withoutDecisionAnswer(
   return next.blocks.some((block) => block.id === messageId)
     ? { ...next, blocks: next.blocks.filter((block) => block.id !== messageId) }
     : next;
+}
+
+/**
+ * The session as a turn left it that sends a decision answer, with the answer
+ * still queued, marked delivering, until the provider takes it; a failed
+ * launch or a quit before then loses nothing. The turn's user message carries
+ * the answer's id, in place of one left by an attempt that never got through.
+ */
+export function keepDecisionAnswer(
+  before: Session,
+  after: Session,
+  messageId: string | undefined,
+): Session {
+  const message =
+    messageId && isDecisionAnswerId(messageId)
+      ? before.queuedMessages?.find((entry) => entry.id === messageId)
+      : undefined;
+  if (!message) return after;
+  let blocks = after.blocks;
+  // A Mono's bubble already carries the id; elsewhere the newest user message
+  // is this turn's.
+  if (!message.blockId) {
+    let newest = blocks.length - 1;
+    while (newest >= 0 && blocks[newest].role !== "user") newest--;
+    blocks = blocks.flatMap((block, index) =>
+      index === newest
+        ? [{ ...block, id: message.id }]
+        : block.id === message.id
+          ? []
+          : [block],
+    );
+  }
+  return {
+    ...after,
+    blocks,
+    queuedMessages: [
+      { ...message, delivering: true },
+      ...(after.queuedMessages ?? []).filter((entry) => entry.id !== message.id),
+    ],
+    queueStatus: before.queueStatus ?? "active",
+  };
+}
+
+/** The provider took the answer: it leaves the queue. */
+export function acceptDecisionAnswer(
+  session: Session,
+  messageId: string,
+): Session {
+  return session.queuedMessages?.some(
+    (entry) => entry.id === messageId && entry.delivering,
+  )
+    ? dequeueQueuedMessage(session, messageId)
+    : session;
+}
+
+/**
+ * The answer did not reach the provider: it waits in the queue, paused, with
+ * the error, and the user message of the failed attempt goes.
+ */
+export function returnDecisionAnswer(
+  session: Session,
+  messageId: string,
+  error: string,
+): Session {
+  const message = session.queuedMessages?.find(
+    (entry) => entry.id === messageId && entry.delivering,
+  );
+  if (!message) return session;
+  return {
+    ...session,
+    blocks: message.blockId
+      ? session.blocks
+      : session.blocks.filter((block) => block.id !== messageId),
+    queuedMessages: session.queuedMessages?.map((entry) =>
+      entry === message ? { ...entry, delivering: undefined, error } : entry,
+    ),
+    queueStatus: "paused",
+  };
 }

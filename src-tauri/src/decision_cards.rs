@@ -177,29 +177,48 @@ pub(crate) fn mark_queued(
     Ok(())
 }
 
+/// Whether the session's saved queue already holds the card's answer.
+fn answer_saved(conn: &Connection, session_id: &str, card_id: &str) -> rusqlite::Result<bool> {
+    let queue: Option<String> = conn
+        .query_row(
+            "SELECT queued_messages_json FROM sessions WHERE id = ?1",
+            [session_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let id = format!("{ANSWER_PREFIX}{card_id}");
+    Ok(queue
+        .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
+        .is_some_and(|messages| messages.iter().any(|message| message["id"] == id.as_str())))
+}
+
 /// Gives back a claim whose answer could not be sent, so the card waits again.
-/// Another caller's outcome is left alone.
+/// Another caller's outcome is left alone, and so is an answer another save
+/// already queued: the card stays answered and the caller keeps the answer.
 pub(crate) fn release(
     conn: &Connection,
     session_id: &str,
     card_id: &str,
     outcome: &Value,
 ) -> rusqlite::Result<Option<Value>> {
-    let Some((mut card, _)) = saved(conn, session_id, card_id)? else {
+    let tx = conn.unchecked_transaction()?;
+    let Some((mut card, _)) = saved(&tx, session_id, card_id)? else {
         return Ok(None);
     };
-    if card.get("outcome") != Some(outcome) {
-        return stored(conn, session_id, card_id);
+    if card.get("outcome") != Some(outcome) || answer_saved(&tx, session_id, card_id)? {
+        return stored(&tx, session_id, card_id);
     }
     if let Some(fields) = card.as_object_mut() {
         fields.remove("outcome");
     }
-    conn.execute(
+    tx.execute(
         "UPDATE decision_cards SET card_json = ?3, waiting = 1, sending = 0 WHERE session_id = ?1 AND card_id = ?2",
         params![session_id, card_id, card.to_string()],
     )?;
+    let released = stored(&tx, session_id, card_id)?;
+    tx.commit()?;
     delivering().remove(&(session_id.to_owned(), card_id.to_owned()));
-    stored(conn, session_id, card_id)
+    Ok(released)
 }
 
 /// The cards asked in the given turns, in the order they were asked, and with
@@ -354,6 +373,15 @@ mod tests {
     fn conn() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         ensure_table(&conn).unwrap();
+        // The part of the sessions table cards read.
+        conn.execute_batch(
+            "CREATE TABLE sessions (
+               id TEXT PRIMARY KEY,
+               worktree_removed INTEGER NOT NULL DEFAULT 0,
+               queued_messages_json TEXT NOT NULL DEFAULT '[]'
+             )",
+        )
+        .unwrap();
         conn
     }
 
@@ -505,9 +533,8 @@ mod tests {
     fn lists_sessions_with_a_waiting_card_while_their_worktree_stands() {
         let conn = conn();
         conn.execute_batch(
-            "CREATE TABLE sessions (id TEXT PRIMARY KEY, worktree_removed INTEGER NOT NULL);
-             CREATE TABLE orchestration_workers (session_id TEXT PRIMARY KEY, lead_id TEXT NOT NULL);
-             INSERT INTO sessions VALUES
+            "CREATE TABLE orchestration_workers (session_id TEXT PRIMARY KEY, lead_id TEXT NOT NULL);
+             INSERT INTO sessions(id, worktree_removed) VALUES
                ('waiting', 0), ('settled', 0), ('removed', 0), ('both', 0), ('worker', 0);
              INSERT INTO orchestration_workers VALUES ('worker', 'lead');",
         )

@@ -3819,4 +3819,30 @@ mod tests {
         assert!(record.queued_messages.is_empty());
         assert_eq!(record.decision_cards[0]["sending"], true);
     }
+    #[test]
+    fn a_release_keeps_an_answer_another_save_already_queued() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.lock_conn().unwrap();
+        save_session(&conn, &sample("kept", "/tmp/project", "Ask")).unwrap();
+        answered_card(&conn, "kept");
+        let answer =
+            crate::decision_cards::list(&conn, "kept", &std::collections::HashSet::new(), true)
+                .unwrap()[0]["outcome"]
+                .clone();
+        // A routine save stored the answer before this window's own save failed.
+        let mut session = sample("kept", "/tmp/project", "Ask");
+        session.queued_messages = vec![json!({"id": "decision-a", "text": "yes"})];
+        save_session(&conn, &session).unwrap();
+        let kept = crate::decision_cards::release(&conn, "kept", "a", &answer)
+            .unwrap()
+            .unwrap();
+        assert_eq!(kept["outcome"], answer);
+        assert!(kept.get("sending").is_none());
+        // Without the answer saved, the same release gives the card back.
+        save_session(&conn, &sample("kept", "/tmp/project", "Ask")).unwrap();
+        let waiting = crate::decision_cards::release(&conn, "kept", "a", &answer)
+            .unwrap()
+            .unwrap();
+        assert!(waiting.get("outcome").is_none());
+    }
 }

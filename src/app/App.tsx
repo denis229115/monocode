@@ -466,6 +466,7 @@ import {
 import {
   canDispatchQueuedHead,
   canSteerQueuedHead,
+  canRemoveQueuedMessage,
   dequeueQueuedMessage,
   queuedMessageForSubmit,
 } from "../features/sessions/model/messageQueue";
@@ -621,10 +622,14 @@ import {
 } from "../features/artifacts/artifacts";
 import {
   findDecisionCard,
+  isDecisionAnswerId,
   withDecisionCard,
 } from "../features/sessions/model/decisionCard";
 import {
+  acceptDecisionAnswer,
   decisionAnswerer,
+  keepDecisionAnswer,
+  returnDecisionAnswer,
   withDecisionAnswer,
   withoutDecisionAnswer,
 } from "../features/sessions/model/decisionAnswers";
@@ -6817,6 +6822,26 @@ function Workspace({
           return false;
         }
       }
+      // A decision answer stays queued until the provider takes it, and goes
+      // back to the queue if it never does.
+      const answerId =
+        options?.queuedMessageId && isDecisionAnswerId(options.queuedMessageId)
+          ? options.queuedMessageId
+          : undefined;
+      let answerSettled = false;
+      const settleAnswer = (error?: string) => {
+        if (!answerId || answerSettled) return;
+        answerSettled = true;
+        setSessions((prev) =>
+          prev.map((s) =>
+            s.id !== sessionId
+              ? s
+              : error === undefined
+                ? acceptDecisionAnswer(s, answerId)
+                : returnDecisionAnswer(s, answerId, error),
+          ),
+        );
+      };
       const noteCard =
         options && "noteCard" in options ? options.noteCard : current.noteCard;
       const handoffCard =
@@ -7096,7 +7121,11 @@ function Workspace({
           if (options?.queuedMessageId) {
             next = dequeueQueuedMessage(next, options.queuedMessageId);
           }
-          return appendSteerUser(next, submittedText, visible, cards);
+          return keepDecisionAnswer(
+            s,
+            appendSteerUser(next, submittedText, visible, cards),
+            answerId,
+          );
         });
         sessionsRef.current = nextSessions;
         setSessions(nextSessions);
@@ -7120,6 +7149,7 @@ function Workspace({
               ),
               attachments: prepared,
             });
+            settleAnswer();
           } catch (error: unknown) {
             const message =
               error instanceof Error
@@ -7130,6 +7160,7 @@ function Workspace({
               message,
             });
             flushHarnessEvents();
+            settleAnswer(message);
           }
         })();
         return true;
@@ -7407,6 +7438,12 @@ function Workspace({
                 );
           }),
         );
+        // A decision answer stays queued until the provider takes it.
+        setSessions((prev) =>
+          prev.map((s) =>
+            s.id === sessionId ? keepDecisionAnswer(current, s, answerId) : s,
+          ),
+        );
       };
       if (!options?.resendEdited) {
         flushSync(commitSubmittedTurn);
@@ -7473,6 +7510,7 @@ function Workspace({
         if (pendingSwitch) {
           void forgetHarnessSession(pendingSwitch.from, sessionId);
         }
+        settleAnswer(`${current.harness} is not connected yet.`);
         editedResend?.reject();
         options?.onSettled?.({
           status: "failed",
@@ -7831,7 +7869,14 @@ function Workspace({
               appAccess: operatorAccess,
               text,
               attachments: turnAttachments,
-              ...(editedResend ? { onAccepted: acceptEditedResend } : {}),
+              ...(editedResend || answerId
+                ? {
+                    onAccepted: () => {
+                      if (editedResend) acceptEditedResend();
+                      settleAnswer();
+                    },
+                  }
+                : {}),
               onEvent: routeTurnEvent,
             });
           let sendText = orchestrator.prompt(
@@ -7944,6 +7989,8 @@ function Workspace({
           else if (appContext.length)
             sendText += `\n\n${appContext.join("\n\n")}`;
           await sendTurn(sendText);
+          // Providers that never say they took the turn took it by now.
+          if (!providerFailureSeen) settleAnswer();
           if (agentFiles) {
             recordAgentContext(
               sessionId,
@@ -8117,6 +8164,9 @@ function Workspace({
           }
         })
         .finally(() => {
+          settleAnswer(
+            controlOutcome.error ?? "The agent did not get this answer.",
+          );
           editedResend?.reject();
           if (editedResend) editedResends.finish(sessionId);
           options?.onSettled?.(
@@ -8883,11 +8933,16 @@ function Workspace({
   const onDeleteQueuedMessage = useCallback(
     (sessionId: string, messageId: string) => {
       setSessions((prev) =>
-        prev.map((session) =>
-          session.id === sessionId
+        prev.map((session) => {
+          const message = session.queuedMessages?.find(
+            (entry) => entry.id === messageId,
+          );
+          return session.id === sessionId &&
+            message &&
+            canRemoveQueuedMessage(message)
             ? dequeueQueuedMessage(session, messageId)
-            : session,
-        ),
+            : session;
+        }),
       );
     },
     [],
@@ -10171,6 +10226,12 @@ function Workspace({
           return false;
         }
       },
+      restore: (sessionId, messageId, text) =>
+        setSessions((prev) =>
+          prev.map((s) =>
+            s.id === sessionId ? withDecisionAnswer(s, messageId, text) : s,
+          ),
+        ),
       show: (sessionId, card) =>
         setSessions((prev) =>
           prev.map((s) => (s.id === sessionId ? withDecisionCard(s, card) : s)),

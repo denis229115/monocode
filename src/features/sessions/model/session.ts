@@ -282,6 +282,8 @@ export type QueuedMessage = {
   monoSessionCompletion?: MonoSessionCompletion;
   /** Delivery failed; the message remains available to retry or edit. */
   error?: string;
+  /** On its way to the provider, kept until it takes it. Never saved. */
+  delivering?: true;
 };
 
 export type MessageQueueStatus = "active" | "paused" | "resuming";

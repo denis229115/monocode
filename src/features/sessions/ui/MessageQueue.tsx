@@ -10,6 +10,7 @@ import {
   X,
 } from "../../../shared/ui/icons";
 import { isImeComposition } from "../../../shared/lib/keyboard";
+import { canRemoveQueuedMessage } from "../model/messageQueue";
 import type { MessageQueueStatus, QueuedMessage } from "../model/session";
 
 export function MessageQueue({
@@ -97,7 +98,7 @@ export function MessageQueue({
           </div>
         ) : null}
         {messages.map((message, index) => {
-          const sending = sendingId === message.id;
+          const sending = sendingId === message.id || !!message.delivering;
           const editing = editingId === message.id;
           const label =
             (message.monoSessionCompletion
@@ -191,16 +192,18 @@ export function MessageQueue({
                   >
                     <Pencil className="size-3.5" />
                   </button>
-                  <button
-                    type="button"
-                    title="Remove queued message"
-                    aria-label="Remove queued message"
-                    disabled={sending}
-                    onClick={() => onDelete?.(message.id)}
-                    className="grid size-6 shrink-0 place-items-center rounded-md hover:bg-content/10 hover:text-content"
-                  >
-                    <Trash2 className="size-3.5" />
-                  </button>
+                  {canRemoveQueuedMessage(message) ? (
+                    <button
+                      type="button"
+                      title="Remove queued message"
+                      aria-label="Remove queued message"
+                      disabled={sending}
+                      onClick={() => onDelete?.(message.id)}
+                      className="grid size-6 shrink-0 place-items-center rounded-md hover:bg-content/10 hover:text-content"
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  ) : null}
                 </>
               )}
             </div>
