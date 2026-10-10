@@ -1,6 +1,6 @@
 import { leafIds, newTab, type WorkspaceTab } from "../../workspace/model/layout";
 import type { DockSide, ProjectTerminalDock } from "../../projects/model/projectTerminal";
-import { sessionNeedsInput, type Session } from "./session";
+import { sessionBlockedOnInput, type Session } from "./session";
 import { stopStreaming } from "../../../integrations/harness/core/apply";
 import type { ProjectReturnMemory } from "../../projects/model/projectReturn";
 
@@ -24,10 +24,12 @@ export type ResumedWorkspace = {
   lastDockSide?: DockSide;
 };
 
-/** A turn or approval that would be lost if this webview died. */
+/** A turn or approval that would be lost if this webview died. A waiting
+ * decision card is saved, so it never keeps a chat in flight. */
 export function isInFlightSession(session: Session): boolean {
   return (
-    !session.worktreeRemoved && (!!session.busy || sessionNeedsInput(session))
+    !session.worktreeRemoved &&
+    (!!session.busy || sessionBlockedOnInput(session))
   );
 }
 

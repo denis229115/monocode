@@ -14,9 +14,9 @@ import {
 import { summaryFromSession } from "../../sessions/data/sessionHistory";
 import { resolveModel } from "../../sessions/model/models";
 import {
-  hasPendingApproval,
   sessionDisplayTitle,
   sessionDraftBlock,
+  sessionNeedsInput,
   type MonoSpawnedSession,
   type Session,
 } from "../../sessions/model/session";
@@ -190,8 +190,7 @@ export function MonoSessionsPanel({
               );
               const status = unavailable
                 ? "No longer available"
-                : live &&
-                    (hasPendingApproval(live.blocks) || live.pendingQuestion)
+                : live && sessionNeedsInput(live)
                   ? "Needs input"
                   : live?.busy
                     ? "Working"
