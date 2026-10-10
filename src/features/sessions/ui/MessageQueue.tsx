@@ -10,7 +10,7 @@ import {
   X,
 } from "../../../shared/ui/icons";
 import { isImeComposition } from "../../../shared/lib/keyboard";
-import { canRemoveQueuedMessage } from "../model/messageQueue";
+import { canChangeQueuedMessage } from "../model/messageQueue";
 import type { MessageQueueStatus, QueuedMessage } from "../model/session";
 
 export function MessageQueue({
@@ -182,17 +182,19 @@ export function MessageQueue({
                       Steer
                     </button>
                   ) : null}
-                  <button
-                    type="button"
-                    title="Edit queued message"
-                    aria-label="Edit queued message"
-                    disabled={sending || !!message.monoSessionCompletion}
-                    onClick={() => startEdit(message)}
-                    className="grid size-6 shrink-0 place-items-center rounded-md hover:bg-content/10 hover:text-content"
-                  >
-                    <Pencil className="size-3.5" />
-                  </button>
-                  {canRemoveQueuedMessage(message) ? (
+                  {canChangeQueuedMessage(message) ? (
+                    <button
+                      type="button"
+                      title="Edit queued message"
+                      aria-label="Edit queued message"
+                      disabled={sending || !!message.monoSessionCompletion}
+                      onClick={() => startEdit(message)}
+                      className="grid size-6 shrink-0 place-items-center rounded-md hover:bg-content/10 hover:text-content"
+                    >
+                      <Pencil className="size-3.5" />
+                    </button>
+                  ) : null}
+                  {canChangeQueuedMessage(message) ? (
                     <button
                       type="button"
                       title="Remove queued message"

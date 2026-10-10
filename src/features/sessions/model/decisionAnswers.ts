@@ -61,14 +61,28 @@ export type DecisionAnswerHost = {
  * waits again. A card still sending after a restart is queued again by
  * `resume`. Skipping dismisses without sending.
  */
-const MAX_RESUME_FAILURES = 3;
+const MAX_FAILURES = 3;
+const RETRY_MS = 2_000;
 
 export function decisionAnswerer(host: DecisionAnswerHost) {
   const answering = new Set<string>();
-  /** Cards this window took up, or found another caller holding. */
-  const resumed = new Set<string>();
-  /** Failed attempts to take a card up, retried a few times. */
+  /** Cards this window holds whose answer is not queued or given back yet. */
+  const owned = new Set<string>();
+  /** Sending cards another caller holds. */
+  const elsewhere = new Set<string>();
   const failures = new Map<string, number>();
+
+  /** A failed step is tried again later, a few times. */
+  const retry = (sessionId: string, cardId: string) => {
+    const key = `${sessionId}:${cardId}`;
+    const count = (failures.get(key) ?? 0) + 1;
+    failures.set(key, count);
+    if (count < MAX_FAILURES)
+      setTimeout(
+        () => void resume(sessionId, cardId).catch(() => undefined),
+        RETRY_MS * count,
+      );
+  };
 
   const deliver = async (
     sessionId: string,
@@ -119,13 +133,24 @@ export function decisionAnswerer(host: DecisionAnswerHost) {
         host.saved(sessionId),
       );
       if (claim.card) host.show(sessionId, claim.card);
-      if (claim.claimed) await deliver(sessionId, card, outcome);
+      if (!claim.claimed) return;
+      owned.add(key);
+      try {
+        await deliver(sessionId, card, outcome);
+        owned.delete(key);
+      } catch (error) {
+        retry(sessionId, cardId);
+        throw error;
+      }
     } finally {
       answering.delete(key);
     }
   };
 
-  /** Queues the answer of a card loaded while still sending, once. */
+  /**
+   * Queues the answer of a card still sending: one loaded after a restart, or
+   * one whose queuing here failed and could not be given back either.
+   */
   const resume = async (sessionId: string, cardId: string): Promise<void> => {
     const key = `${sessionId}:${cardId}`;
     const card = host.card(sessionId, cardId);
@@ -133,21 +158,24 @@ export function decisionAnswerer(host: DecisionAnswerHost) {
       !card?.sending ||
       card.outcome?.kind !== "answered" ||
       answering.has(key) ||
-      resumed.has(key) ||
-      (failures.get(key) ?? 0) >= MAX_RESUME_FAILURES
+      elsewhere.has(key) ||
+      (failures.get(key) ?? 0) >= MAX_FAILURES
     )
       return;
     answering.add(key);
     try {
-      let taken: boolean;
-      try {
-        taken = await host.resume(sessionId, cardId);
-      } catch (error) {
-        failures.set(key, (failures.get(key) ?? 0) + 1);
-        throw error;
+      if (!owned.has(key)) {
+        if (!(await host.resume(sessionId, cardId))) {
+          elsewhere.add(key);
+          return;
+        }
+        owned.add(key);
       }
-      resumed.add(key);
-      if (taken) await deliver(sessionId, card, card.outcome);
+      await deliver(sessionId, card, card.outcome);
+      owned.delete(key);
+    } catch (error) {
+      retry(sessionId, cardId);
+      throw error;
     } finally {
       answering.delete(key);
     }
@@ -262,5 +290,42 @@ export function returnDecisionAnswer(
       entry === message ? { ...entry, delivering: undefined, error } : entry,
     ),
     queueStatus: "paused",
+  };
+}
+
+/**
+ * Settles a decision answer that a turn sends. It leaves the queue once the
+ * provider takes the turn, or, for providers that never say, once the turn
+ * finished cleanly without a Stop. Anything else puts it back, paused: a
+ * failure, a Stop, a launch that never got going.
+ */
+export function decisionAnswerTurn(
+  answerId: string | undefined,
+  update: (change: (session: Session) => Session) => void,
+) {
+  let settled = false;
+  const settle = (change: (session: Session, id: string) => Session) => {
+    if (!answerId || settled) return;
+    settled = true;
+    update((session) => change(session, answerId));
+  };
+  return {
+    /** The provider took the turn. */
+    accepted: () => settle(acceptDecisionAnswer),
+    /** The turn's send returned; `current` is false after a Stop. */
+    finished: (failed: boolean, current: boolean) => {
+      if (!failed && current) settle(acceptDecisionAnswer);
+    },
+    /** The turn is over: an answer not taken by now goes back. */
+    done: (error: string | undefined, current: boolean) =>
+      settle((session, id) =>
+        returnDecisionAnswer(
+          session,
+          id,
+          current
+            ? (error ?? "The agent did not get this answer.")
+            : "Stopped before the agent got this answer.",
+        ),
+      ),
   };
 }

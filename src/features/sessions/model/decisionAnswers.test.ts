@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   acceptDecisionAnswer,
+  decisionAnswerTurn,
   decisionAnswerer,
   keepDecisionAnswer,
   returnDecisionAnswer,
@@ -15,7 +16,7 @@ import {
 } from "./decisionCard";
 import {
   canDispatchQueuedHead,
-  canRemoveQueuedMessage,
+  canChangeQueuedMessage,
   canSteerQueuedHead,
   dequeueQueuedMessage,
   queuedMessageForSubmit,
@@ -272,32 +273,93 @@ describe("answering a decision card", () => {
     expect(queue()).toEqual([{ id: "decision-old", text: "Merge now?\nyes" }]);
   });
 
-  it("tries again to take up a sending answer after a failed attempt, a few times", async () => {
+  it("retries a failed take-up on its own, a few times", async () => {
+    const quitMidAnswer = async () => {
+      const shared = store();
+      const before = window(shared, () => new Promise<void>(() => {}));
+      void before.answer("mono", "old", reply("yes"));
+      await vi.waitFor(() => expect(before.host.queue).toHaveBeenCalled());
+      shared.quit();
+      return shared;
+    };
+    const shared = await quitMidAnswer();
+    const stuck = await quitMidAnswer();
+    vi.useFakeTimers();
+    try {
+      const after = window(shared);
+      shared.resume.mockRejectedValueOnce(new Error("store is locked"));
+      await expect(after.resume("mono", "old")).rejects.toThrow("locked");
+      expect(after.queue()).toEqual([]);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(after.queue().map((message) => message.id)).toEqual([
+        "decision-old",
+      ]);
+
+      // Failures stop being retried after a few.
+      const next = window(stuck);
+      stuck.resume.mockRejectedValue(new Error("store is locked"));
+      await next.resume("mono", "old").catch(() => undefined);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(stuck.resume).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries queuing an answer whose save and give-back both failed", async () => {
+    vi.useFakeTimers();
+    try {
+      const shared = store();
+      let fail = true;
+      const { answer, seen, queue } = window(shared, (ids) => {
+        if (fail) throw new Error("disk full");
+        shared.save(ids);
+      });
+      shared.release.mockRejectedValueOnce(new Error("store is locked"));
+      await expect(answer("mono", "old", reply("yes"))).rejects.toThrow(
+        "locked",
+      );
+      // Answered and sending with nothing queued, until the retry.
+      expect(shared.stored().sending).toBe(true);
+      expect(seen().sending).toBe(true);
+      expect(queue()).toEqual([]);
+      fail = false;
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(queue().map((message) => message.id)).toEqual(["decision-old"]);
+      expect(shared.stored().sending).toBeUndefined();
+      expect(seen().sending).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a recovery it took up when its save and give-back both fail", async () => {
     const shared = store();
     const before = window(shared, () => new Promise<void>(() => {}));
     void before.answer("mono", "old", reply("yes"));
     await vi.waitFor(() => expect(before.host.queue).toHaveBeenCalled());
     shared.quit();
-    const after = window(shared);
-    shared.resume.mockRejectedValueOnce(new Error("store is locked"));
-    await expect(after.resume("mono", "old")).rejects.toThrow("locked");
-    expect(after.queue()).toEqual([]);
-    await after.resume("mono", "old");
-    expect(after.queue().map((message) => message.id)).toEqual([
-      "decision-old",
-    ]);
-
-    // Failures stop being retried after a few.
-    const stuck = store();
-    const first = window(stuck, () => new Promise<void>(() => {}));
-    void first.answer("mono", "old", reply("yes"));
-    await vi.waitFor(() => expect(first.host.queue).toHaveBeenCalled());
-    stuck.quit();
-    const next = window(stuck);
-    stuck.resume.mockRejectedValue(new Error("store is locked"));
-    for (let attempt = 0; attempt < 5; attempt++)
-      await next.resume("mono", "old").catch(() => undefined);
-    expect(stuck.resume).toHaveBeenCalledTimes(3);
+    vi.useFakeTimers();
+    try {
+      let fail = true;
+      const after = window(shared, (ids) => {
+        if (fail) throw new Error("disk full");
+        shared.save(ids);
+      });
+      shared.release.mockRejectedValueOnce(new Error("store is locked"));
+      await expect(after.resume("mono", "old")).rejects.toThrow("locked");
+      expect(after.queue()).toEqual([]);
+      // Storage still has this window holding it; the retry needs no take-up.
+      fail = false;
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(after.queue().map((message) => message.id)).toEqual([
+        "decision-old",
+      ]);
+      expect(shared.resume).toHaveBeenCalledTimes(1);
+      expect(shared.stored().sending).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("dismisses a card whose questions were all skipped, without queuing", async () => {
@@ -367,11 +429,11 @@ describe("queuing a decision answer", () => {
     );
   });
 
-  it("cannot be removed from the queue", () => {
+  it("cannot be edited or removed in the queue", () => {
     const queued = withDecisionAnswer(chat(), "decision-old", "yes");
-    expect(canRemoveQueuedMessage(queued.queuedMessages![0])).toBe(false);
+    expect(canChangeQueuedMessage(queued.queuedMessages![0])).toBe(false);
     expect(
-      canRemoveQueuedMessage({ id: "other", text: "hi", attachments: [] }),
+      canChangeQueuedMessage({ id: "other", text: "hi", attachments: [] }),
     ).toBe(true);
   });
 
@@ -478,6 +540,32 @@ describe("sending a queued decision answer to the agent", () => {
       "u0",
       "decision-old",
     ]);
+  });
+
+  it("goes back to the queue when Stop cancels the turn during provider setup", () => {
+    let stopped = launch(queued());
+    const turn = decisionAnswerTurn("decision-old", (change) => {
+      stopped = change(stopped);
+    });
+    // Stopped, the provider returns quietly without having sent the prompt.
+    turn.finished(false, false);
+    expect(stopped.queuedMessages?.[0].delivering).toBe(true);
+    turn.done(undefined, false);
+    expect(stopped.queuedMessages?.[0]).toMatchObject({
+      id: "decision-old",
+      error: "Stopped before the agent got this answer.",
+    });
+    expect(stopped.queueStatus).toBe("paused");
+    expect(canDispatchQueuedHead({ ...stopped, busy: false })).toBe(false);
+
+    // Not stopped, a turn that finished cleanly took it.
+    let clean = launch(queued());
+    const finished = decisionAnswerTurn("decision-old", (change) => {
+      clean = change(clean);
+    });
+    finished.finished(false, true);
+    finished.done(undefined, true);
+    expect(clean.queuedMessages).toBeUndefined();
   });
 
   it("leaves other queued messages to the existing flow", () => {

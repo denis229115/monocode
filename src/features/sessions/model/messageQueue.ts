@@ -95,9 +95,10 @@ export function queuedMessageForSubmit(
 }
 
 /**
- * A decision answer stays queued until it reaches the agent: removing it would
- * leave its card answered with nothing sent.
+ * Whether a queued message can be edited or removed. A decision answer can't:
+ * removing it would leave its card answered with nothing sent, and editing it
+ * would send something other than the answer its card shows.
  */
-export function canRemoveQueuedMessage(message: QueuedMessage): boolean {
+export function canChangeQueuedMessage(message: QueuedMessage): boolean {
   return !isDecisionAnswerId(message.id);
 }

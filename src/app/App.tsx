@@ -466,7 +466,7 @@ import {
 import {
   canDispatchQueuedHead,
   canSteerQueuedHead,
-  canRemoveQueuedMessage,
+  canChangeQueuedMessage,
   dequeueQueuedMessage,
   queuedMessageForSubmit,
 } from "../features/sessions/model/messageQueue";
@@ -626,10 +626,9 @@ import {
   withDecisionCard,
 } from "../features/sessions/model/decisionCard";
 import {
-  acceptDecisionAnswer,
+  decisionAnswerTurn,
   decisionAnswerer,
   keepDecisionAnswer,
-  returnDecisionAnswer,
   withDecisionAnswer,
   withoutDecisionAnswer,
 } from "../features/sessions/model/decisionAnswers";
@@ -6828,20 +6827,11 @@ function Workspace({
         options?.queuedMessageId && isDecisionAnswerId(options.queuedMessageId)
           ? options.queuedMessageId
           : undefined;
-      let answerSettled = false;
-      const settleAnswer = (error?: string) => {
-        if (!answerId || answerSettled) return;
-        answerSettled = true;
+      const answerTurn = decisionAnswerTurn(answerId, (change) =>
         setSessions((prev) =>
-          prev.map((s) =>
-            s.id !== sessionId
-              ? s
-              : error === undefined
-                ? acceptDecisionAnswer(s, answerId)
-                : returnDecisionAnswer(s, answerId, error),
-          ),
-        );
-      };
+          prev.map((s) => (s.id === sessionId ? change(s) : s)),
+        ),
+      );
       const noteCard =
         options && "noteCard" in options ? options.noteCard : current.noteCard;
       const handoffCard =
@@ -7149,7 +7139,7 @@ function Workspace({
               ),
               attachments: prepared,
             });
-            settleAnswer();
+            answerTurn.accepted();
           } catch (error: unknown) {
             const message =
               error instanceof Error
@@ -7160,7 +7150,7 @@ function Workspace({
               message,
             });
             flushHarnessEvents();
-            settleAnswer(message);
+            answerTurn.done(message, true);
           }
         })();
         return true;
@@ -7510,7 +7500,7 @@ function Workspace({
         if (pendingSwitch) {
           void forgetHarnessSession(pendingSwitch.from, sessionId);
         }
-        settleAnswer(`${current.harness} is not connected yet.`);
+        answerTurn.done(`${current.harness} is not connected yet.`, true);
         editedResend?.reject();
         options?.onSettled?.({
           status: "failed",
@@ -7873,7 +7863,7 @@ function Workspace({
                 ? {
                     onAccepted: () => {
                       if (editedResend) acceptEditedResend();
-                      settleAnswer();
+                      answerTurn.accepted();
                     },
                   }
                 : {}),
@@ -7989,8 +7979,12 @@ function Workspace({
           else if (appContext.length)
             sendText += `\n\n${appContext.join("\n\n")}`;
           await sendTurn(sendText);
-          // Providers that never say they took the turn took it by now.
-          if (!providerFailureSeen) settleAnswer();
+          // Providers that never say they took the turn took it by now,
+          // unless it was stopped: some return quietly when cancelled.
+          answerTurn.finished(
+            providerFailureSeen,
+            turnGen.current.get(sessionId) === gen,
+          );
           if (agentFiles) {
             recordAgentContext(
               sessionId,
@@ -8164,8 +8158,9 @@ function Workspace({
           }
         })
         .finally(() => {
-          settleAnswer(
-            controlOutcome.error ?? "The agent did not get this answer.",
+          answerTurn.done(
+            controlOutcome.error,
+            turnGen.current.get(sessionId) === gen,
           );
           editedResend?.reject();
           if (editedResend) editedResends.finish(sessionId);
@@ -8939,7 +8934,7 @@ function Workspace({
           );
           return session.id === sessionId &&
             message &&
-            canRemoveQueuedMessage(message)
+            canChangeQueuedMessage(message)
             ? dequeueQueuedMessage(session, messageId)
             : session;
         }),
@@ -8969,7 +8964,7 @@ function Workspace({
             ? {
                 ...session,
                 queuedMessages: session.queuedMessages?.map((message) =>
-                  message.id === messageId
+                  message.id === messageId && canChangeQueuedMessage(message)
                     ? { ...message, text, error: undefined }
                     : message,
                 ),
