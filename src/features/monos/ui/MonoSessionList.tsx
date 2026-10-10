@@ -27,7 +27,7 @@ import {
 } from "../../sessions/model/sessionFilters";
 import { fuzzyMatch } from "../../../shared/lib/fuzzy";
 import {
-  hasPendingApproval,
+  sessionNeedsInput,
   type MonoSpawnedSession,
   type Session,
 } from "../../sessions/model/session";
@@ -200,7 +200,7 @@ export function MonoSessionList({
   for (const row of rows) {
     const live = sessions.find((entry) => entry.id === row.id);
     if (live?.busy) busyIds.add(row.id);
-    else if (live && (hasPendingApproval(live.blocks) || live.pendingQuestion))
+    else if (live && sessionNeedsInput(live))
       approvalIds.add(row.id);
     else if (live || row.createdAt) doneIds.add(row.id);
   }
@@ -306,10 +306,7 @@ export function MonoSessionList({
                   busy={!!live?.busy}
                   done={false}
                   linkedUpdate={false}
-                  needsApproval={
-                    !!live &&
-                    (hasPendingApproval(live.blocks) || !!live.pendingQuestion)
-                  }
+                  needsApproval={!!live && sessionNeedsInput(live)}
                   project={
                     agent.projects.find(
                       (project) => project.path === summary.cwd,
