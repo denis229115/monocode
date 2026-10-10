@@ -71,6 +71,11 @@ readline.createInterface({input: process.stdin}).on('line', line => {
     send({type: 'control_response', response: {subtype: 'success', request_id: request.request_id}});
   }
   if (request.type === 'control_request' && request.request.subtype === 'list_models') send({type: 'control_response', response: {subtype: 'success', request_id: request.request_id, response: {models: [{value: 'claude-fixture-model', resolvedModel: 'claude-fixture-model', displayName: 'Fixture Claude'}]}}});
+  if (request.type === 'user') {
+    const content = request.message?.content;
+    const prompt = typeof content === 'string' ? content : (content ?? []).filter(block => block.type === 'text').map(block => block.text).join('\\n');
+    record({claudePrompt: prompt, args: process.argv.slice(2)});
+  }
   if (request.type === 'user') setTimeout(() => {
     send({type: 'assistant', session_id: 'fixture-claude', message: {content: [{type: 'text', text: 'Headless Claude completed'}]}});
     send({type: 'result', subtype: 'success', session_id: 'fixture-claude'});
@@ -322,11 +327,14 @@ describe("existing providers over headless process I/O", () => {
             runtimeMode: "supervised",
           });
         writeFileSync(log, "");
+        // Title helpers run through the same fake binary and can log late,
+        // so each turn sends its own prompt and reads only that record.
+        const prompt = `effort ${harness} turn ${turn}`;
         engine.command({
           type: "send",
           commandId: `effort-${harness}-${turn}`,
           sessionId,
-          text: "hello",
+          text: prompt,
         });
         await vi.waitFor(
           () => expect(store.session(sessionId).status).toBe("idle"),
@@ -336,20 +344,14 @@ describe("existing providers over headless process I/O", () => {
           .trim()
           .split("\n")
           .map((line) => JSON.parse(line));
-        // The first turn also starts a title helper through the same fake
-        // binary, and under load it can log before or after either turn.
-        // Read only the session's own turn: Codex's carries the user's
-        // prompt, and Claude's helper runs without session persistence.
         if (harness === "codex")
           efforts.push(
-            calls.find((call) => call.codexPrompt === "hello").codexEffort,
+            calls.find((call) => call.codexPrompt === prompt).codexEffort,
           );
         else {
           const args: string[] = calls.find(
-            (call) =>
-              call.claudeArgs &&
-              !call.claudeArgs.includes("--no-session-persistence"),
-          ).claudeArgs;
+            (call) => call.claudePrompt === prompt,
+          ).args;
           efforts.push(args[args.indexOf("--effort") + 1] ?? null);
         }
       }
