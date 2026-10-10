@@ -48,6 +48,11 @@ import { SecondOpinionCard } from "./SecondOpinionCard";
 import { NoteMiniCard } from "../../notes/ui/NoteMiniCard";
 import { ArtifactCard } from "../../artifacts/ui/ArtifactCard";
 import { artifactCards } from "../../artifacts/artifacts";
+import {
+  turnDecisionCards,
+  type DecisionCard,
+} from "../model/decisionCard";
+import { DecisionCardSummary } from "./DecisionCards";
 
 import { TerminalSpinner } from "./TerminalSpinner";
 import { Popover } from "../../../shared/ui/Popover";
@@ -235,6 +240,8 @@ type Props = {
   onSaveSelectionNote?: (text: string) => void | Promise<void>;
   onOpenFile?: (path: string) => void;
   onOpenArtifact?: (id: string) => void;
+  /** The session's decision cards; each shows under the turn that asked it. */
+  decisionCards?: DecisionCard[];
   onOpenDiff?: (path: string) => void;
   onOpenPlan?: (blockId: string) => void;
   onBuildPlan?: (blockId: string, target?: PlanBuildTarget) => void;
@@ -304,6 +311,7 @@ function AgentTranscriptComponent({
   onSaveSelectionNote,
   onOpenFile,
   onOpenArtifact,
+  decisionCards,
   onOpenDiff,
   onOpenPlan,
   onBuildPlan,
@@ -1100,6 +1108,7 @@ function AgentTranscriptComponent({
           );
           const proposals = turn.filter((block) => block.orchestration);
           const artifacts = artifactCards(turn);
+          const decisions = turnDecisionCards(decisionCards, turn);
           // Proposals are turn results, like the changes card. Keep them out
           // of the live work and append them after all of the lead's output.
           const items = turnCache.turnItems(turn, settled, {
@@ -1595,6 +1604,16 @@ function AgentTranscriptComponent({
                       card={card}
                       onOpen={onOpenArtifact}
                     />
+                  ))}
+                </div>
+              ) : null}
+              {settled && decisions.length > 0 ? (
+                <div
+                  data-decision-results
+                  className="flex flex-col gap-2 px-4 pt-1 pb-3"
+                >
+                  {decisions.map((card) => (
+                    <DecisionCardSummary key={card.id} card={card} />
                   ))}
                 </div>
               ) : null}

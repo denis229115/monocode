@@ -6,6 +6,8 @@ export type UserQuestionOption = {
   id: string;
   label: string;
   description?: string;
+  /** The asker's suggested answer; only decision cards set it. */
+  recommended?: boolean;
 };
 
 export type UserQuestion = {
@@ -15,6 +17,13 @@ export type UserQuestion = {
   multiSelect: boolean;
   allowCustom: boolean;
   options: UserQuestionOption[];
+  /** Web links to look at before answering; only decision cards set them. */
+  links?: string[];
+  /**
+   * Options are taken as written: only the reserved custom id stands for a
+   * typed answer, never a label like "Other". Decision cards set it.
+   */
+  exactOptions?: boolean;
 };
 
 export type UserQuestionPrompt = {
@@ -127,7 +136,16 @@ export function isCustomSelection(
 ): boolean {
   if (optionId === CUSTOM_OPTION_ID) return true;
   const option = question.options.find((item) => item.id === optionId);
-  return option ? isOtherOption(option) : false;
+  return option ? isTypedAnswerOption(question, option) : false;
+}
+
+/** Whether choosing this option means the user types the answer. */
+export function isTypedAnswerOption(
+  question: UserQuestion,
+  option: UserQuestionOption,
+): boolean {
+  if (option.id === CUSTOM_OPTION_ID) return true;
+  return !question.exactOptions && isOtherOption(option);
 }
 
 export function isOtherOption(option: UserQuestionOption): boolean {

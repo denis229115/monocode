@@ -11,6 +11,7 @@ import {
   type Block,
   type Session,
 } from "../../sessions/model/session";
+import type { DecisionCard } from "../../sessions/model/decisionCard";
 import { useMonoTranscript } from "./useMonoTranscript";
 
 vi.mock("../../sessions/data/sessionStore", () => ({
@@ -62,11 +63,13 @@ it("loads ten older turns at each cursor without changing the writable session",
       blocks: turns(10, 10),
       before: 10,
       hasNewer: true,
+      decisionCards: [],
     })
     .mockResolvedValueOnce({
       blocks: turns(0, 10),
       before: null,
       hasNewer: true,
+      decisionCards: [],
     });
   const beforePrepend = vi.fn(() => expect(current.blocks).toHaveLength(10));
   await act(async () => current.loadEarlier(beforePrepend));
@@ -96,6 +99,7 @@ it("keeps streamed updates authoritative while looking through history", async (
     blocks: [...turns(10, 10), ...session.blocks],
     before: 10,
     hasNewer: false,
+    decisionCards: [],
   });
   await act(async () => current.reveal("u10"));
   session = {
@@ -117,6 +121,7 @@ it("jumps directly to an old page instead of loading every intervening turn", as
     blocks: turns(0, 10),
     before: null,
     hasNewer: true,
+    decisionCards: [],
   });
   await act(async () => current.reveal("u3"));
   expect(getMonoTranscriptPage).toHaveBeenCalledOnce();
@@ -170,4 +175,31 @@ it("searches archived messages and current text and leaves normal sessions alone
   expect(current.search).toBeUndefined();
   expect(current.hasEarlier).toBe(false);
   expect(current.historicalBlockIds).toBeUndefined();
+});
+
+it("shows the settled cards an older page brings, beside the session's own", async () => {
+  const card = (id: string, turnId: string, settled: boolean): DecisionCard => ({
+    id,
+    turnId,
+    askedAt: 1,
+    questions: [
+      { id: "q1", prompt: `${id}?`, multiSelect: false, allowCustom: true, options: [] },
+    ],
+    ...(settled ? { outcome: { kind: "dismissed" as const, at: 2 } } : {}),
+  });
+  const waiting = card("waiting", "u0", false);
+  const live = { ...session, decisionCards: [waiting] };
+  act(() => root.render(createElement(Probe, { value: live })));
+  vi.mocked(getMonoTranscriptPage).mockResolvedValueOnce({
+    blocks: turns(10, 10),
+    before: 10,
+    hasNewer: false,
+    // The page knows the waiting card too; the session's copy is newer.
+    decisionCards: [card("old-settled", "u12", true), card("waiting", "u0", true)],
+  });
+  await act(async () => current.loadEarlier());
+  expect(current.decisionCards?.map((entry) => [entry.id, entry.outcome?.kind])).toEqual([
+    ["old-settled", "dismissed"],
+    ["waiting", undefined],
+  ]);
 });
