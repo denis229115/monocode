@@ -1,3 +1,4 @@
+import { isUnsavedDecisionAnswer } from "./decisionCard";
 import { isPreparingHandoff } from "./handoff";
 import type { QueuedMessage, Session } from "./session";
 
@@ -32,7 +33,7 @@ export function dequeueQueuedMessage(
 /**
  * True when the idle session can send its queued head as a new turn.
  * Busy / paused / resuming / usage-limited / preparing-handoff /
- * editing-the-head all wait.
+ * editing-the-head / an answer not yet saved all wait.
  */
 export function canDispatchQueuedHead(session: Session): boolean {
   if (session.busy) return false;
@@ -45,6 +46,7 @@ export function canDispatchQueuedHead(session: Session): boolean {
   if (!head) return false;
   if (isEditingQueuedHead(session)) return false;
   if (isPreparingHandoff(session)) return false;
+  if (isUnsavedDecisionAnswer(session)) return false;
   return true;
 }
 
@@ -67,6 +69,7 @@ export function canSteerQueuedHead(session: Session): boolean {
     session.queueStatus !== "resuming" &&
     !isEditingQueuedHead(session) &&
     !isPreparingHandoff(session) &&
+    !isUnsavedDecisionAnswer(session) &&
     head.intent !== "plan" &&
     head.intent !== "orchestrate"
   );

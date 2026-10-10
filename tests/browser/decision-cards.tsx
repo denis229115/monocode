@@ -207,13 +207,14 @@ function Fixture() {
   const latest = useRef(sessions);
   latest.current = sessions;
   // The app's own answering, with storage and sending stubbed.
-  const [answer] = useState(() =>
+  const [{ answer }] = useState(() =>
     decisionAnswerer({
       card: (sessionId, cardId) => {
         const session = latest.current.find((entry) => entry.id === sessionId);
         return session && findDecisionCard(session, cardId);
       },
-      send: (sessionId, text) => {
+      saved: () => true,
+      queue: async (sessionId, _messageId, text) => {
         sent.push({ sessionId, text });
         setSessions((prev) =>
           prev.map((entry) =>
@@ -230,13 +231,14 @@ function Fixture() {
         );
         return true;
       },
-      claim: async (sessionId, cardId, outcome) => {
+      claim: async (sessionId, cardId, outcome, sending) => {
         const key = `${sessionId}:${cardId}`;
         const card = stored.get(key);
         if (!card || card.outcome) return { card, claimed: false };
-        stored.set(key, { ...card, outcome });
+        stored.set(key, { ...card, outcome, ...(sending ? { sending: true as const } : {}) });
         return { card: stored.get(key), claimed: true };
       },
+      resume: async () => false,
       release: async (sessionId, cardId, outcome) => {
         const key = `${sessionId}:${cardId}`;
         const card = stored.get(key);

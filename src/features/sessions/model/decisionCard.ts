@@ -24,6 +24,8 @@ export type DecisionCard = {
   questions: UserQuestion[];
   askedAt: number;
   outcome?: DecisionOutcome;
+  /** Answered, and the answer not yet saved in the session's queue. */
+  sending?: true;
 };
 
 export type DecisionOutcome =
@@ -227,6 +229,24 @@ export function decisionAnswerText(
     .join("\n\n");
 }
 
+/** The queued message carrying a card's answer; storage matches the two. */
+export function decisionAnswerId(cardId: string): string {
+  return `decision-${cardId}`;
+}
+
+/** True while the next queued message is an answer its card is still saving. */
+export function isUnsavedDecisionAnswer(
+  session: Pick<Session, "decisionCards" | "queuedMessages">,
+): boolean {
+  const head = session.queuedMessages?.[0];
+  return !!(
+    head &&
+    session.decisionCards?.some(
+      (card) => card.sending && decisionAnswerId(card.id) === head.id,
+    )
+  );
+}
+
 export function waitingDecisionCards(
   cards: readonly DecisionCard[] | undefined,
 ): DecisionCard[] {
@@ -347,6 +367,9 @@ export function restoreDecisionCard(value: unknown): DecisionCard | undefined {
       questions,
       askedAt: typeof card.askedAt === "number" ? card.askedAt : 0,
       ...(outcome ? { outcome } : {}),
+      ...(card.sending === true && outcome?.kind === "answered"
+        ? { sending: true as const }
+        : {}),
     };
   } catch {
     return undefined;

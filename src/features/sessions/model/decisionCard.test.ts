@@ -178,6 +178,24 @@ describe("saved cards", () => {
     ).toBe(true);
   });
 
+  it("stay sending only while an answer is still to be queued", () => {
+    const answered: DecisionCard = {
+      ...card("answered", [{ question: "Name?" }]),
+      outcome: {
+        kind: "answered",
+        at: 3,
+        reply: { kind: "answered", answers: {} },
+      },
+    };
+    expect(restoreDecisionCard({ ...answered, sending: true })?.sending).toBe(
+      true,
+    );
+    const waiting = card("waiting", [{ question: "Name?" }]);
+    expect(
+      restoreDecisionCard({ ...waiting, sending: true })?.sending,
+    ).toBeUndefined();
+  });
+
   it("are held to the same rules as a new card", () => {
     const question = (extra: Record<string, unknown>) => ({
       id: "q1",

@@ -623,12 +623,17 @@ import {
   findDecisionCard,
   withDecisionCard,
 } from "../features/sessions/model/decisionCard";
-import { decisionAnswerer } from "../features/sessions/model/decisionAnswers";
+import {
+  decisionAnswerer,
+  withDecisionAnswer,
+  withoutDecisionAnswer,
+} from "../features/sessions/model/decisionAnswers";
 import {
   askDecisionCard,
   claimDecisionCard,
   refreshSavedWaitingDecisions,
   releaseDecisionCard,
+  resumeDecisionCard,
   savedWaitingDecisions,
   subscribeSavedWaitingDecisions,
 } from "../features/sessions/data/decisionCards";
@@ -10123,8 +10128,9 @@ function Workspace({
   );
 
   /**
-   * Saves a decision card's outcome first, then sends its answers as the
-   * agent's next message, after any running turn.
+   * Saves a decision card's outcome first, then queues its answers as the
+   * agent's next message, after any running turn. The queue holds the answer
+   * until the session save that carries it also settles the card.
    */
   const answerDecision = useRef(
     decisionAnswerer({
@@ -10134,28 +10140,36 @@ function Workspace({
           ? findDecisionCard(session, cardId)
           : undefined;
       },
+      saved: (sessionId) => {
+        const session = sessionsRef.current.find((s) => s.id === sessionId);
+        return !!session && shouldPersistSession(session);
+      },
       claim: claimDecisionCard,
+      resume: resumeDecisionCard,
       release: releaseDecisionCard,
-      send: async (sessionId, text) => {
-        const accepted = await submitSessionRef.current(sessionId, text, [], {
-          followUpBehavior: "queue",
-        });
-        if (!accepted) return false;
-        // The card is already saved as answered; save the message carrying
-        // the answer too, rather than waiting for the next routine save. The
-        // no-op update reads the session with the queued message applied.
-        let latest: Session | undefined;
-        flushSync(() =>
-          setSessions((prev) => {
-            latest = prev.find((s) => s.id === sessionId);
-            return prev;
-          }),
-        );
-        if (latest && shouldPersistSession(latest))
-          await upsertSession(latest).catch((error) =>
-            console.error("Failed to save the decision answer:", error),
+      queue: async (sessionId, messageId, text) => {
+        // flushSync runs the updater now, after any pending updates.
+        const change = (update: (session: Session) => Session) => {
+          let changed: Session | undefined;
+          flushSync(() =>
+            setSessions((prev) =>
+              prev.map((s) => (s.id === sessionId ? (changed = update(s)) : s)),
+            ),
           );
-        return true;
+          return changed;
+        };
+        // Every later save carries the answer too, so none can drop it.
+        const latest = change((s) => withDecisionAnswer(s, messageId, text));
+        if (!latest) return false;
+        if (!shouldPersistSession(latest)) return true;
+        try {
+          await upsertSession(latest);
+          return true;
+        } catch (error) {
+          console.error("Failed to save the decision answer:", error);
+          change((s) => withoutDecisionAnswer(s, messageId));
+          return false;
+        }
       },
       show: (sessionId, card) =>
         setSessions((prev) =>
@@ -10166,12 +10180,25 @@ function Workspace({
   );
   const onDecisionAnswer = useCallback(
     (sessionId: string, cardId: string, reply: UserQuestionReply) => {
-      void answerDecision.current(sessionId, cardId, reply).catch((error) =>
-        console.error("Failed to answer the decision card:", error),
-      );
+      void answerDecision.current
+        .answer(sessionId, cardId, reply)
+        .catch((error) =>
+          console.error("Failed to answer the decision card:", error),
+        );
     },
     [],
   );
+  // A card loaded still sending lost its answer to a quit or a failed save.
+  useEffect(() => {
+    for (const session of sessions)
+      for (const card of session.decisionCards ?? [])
+        if (card.sending)
+          void answerDecision.current
+            .resume(session.id, card.id)
+            .catch((error) =>
+              console.error("Failed to resend the decision answer:", error),
+            );
+  }, [sessions]);
 
   const onQuestionInteraction = useCallback(
     (sessionId: string, requestId: number) => {

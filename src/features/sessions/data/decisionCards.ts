@@ -18,18 +18,30 @@ export async function askDecisionCard(
   return stored;
 }
 
-/** Settles a waiting card if no one has; says whether this call did. */
+/**
+ * Settles a waiting card if no one has; says whether this call did. With
+ * `sending`, the card stays sending until a session save queues its answer.
+ */
 export async function claimDecisionCard(
   sessionId: string,
   cardId: string,
   outcome: DecisionOutcome,
+  sending: boolean,
 ): Promise<{ card?: DecisionCard; claimed: boolean }> {
   const result = await invoke<{ card: unknown; claimed: boolean }>(
     "decision_card_claim",
-    { sessionId, cardId, outcome },
+    { sessionId, cardId, outcome, sending },
   );
   void refreshSavedWaitingDecisions();
   return { card: restoreDecisionCard(result.card), claimed: result.claimed };
+}
+
+/** Takes up a card still sending that no one in the app is queuing. */
+export function resumeDecisionCard(
+  sessionId: string,
+  cardId: string,
+): Promise<boolean> {
+  return invoke<boolean>("decision_card_resume", { sessionId, cardId });
 }
 
 /** Gives back a claim whose answer could not be sent. */
