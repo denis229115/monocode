@@ -6,6 +6,8 @@ export type UserQuestionOption = {
   id: string;
   label: string;
   description?: string;
+  /** The asker's suggested answer; only decision cards set it. */
+  recommended?: boolean;
 };
 
 export type UserQuestion = {
@@ -15,6 +17,8 @@ export type UserQuestion = {
   multiSelect: boolean;
   allowCustom: boolean;
   options: UserQuestionOption[];
+  /** Web links to look at before answering; only decision cards set them. */
+  links?: string[];
 };
 
 export type UserQuestionPrompt = {

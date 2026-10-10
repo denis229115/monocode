@@ -48,6 +48,7 @@ import type {
 import { HARNESSES, RUNTIME_MODES } from "../model/session";
 
 import { restoreOrchestrationProposal } from "../../orchestration/model/orchestrationPlan";
+import { restoreDecisionCards } from "../model/decisionCard";
 
 import type { OrchestrationSummary } from "../../orchestration/model/orchestrationSummary";
 
@@ -1006,6 +1007,8 @@ function sanitizeBlock(
     });
     if (cards.length) next.artifactCards = cards;
   }
+  const decisionCards = restoreDecisionCards(block.decisionCards);
+  if (decisionCards) next.decisionCards = decisionCards;
   if (
     block.role === "user" &&
     typeof block.ciContext === "string" &&
