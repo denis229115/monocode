@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { Check, ChevronRight, Folder, Minus } from "../../../shared/ui/icons";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { Bot, Check, ChevronRight, Folder, Minus } from "../../../shared/ui/icons";
 import { NotificationMuteControl } from "./NotificationMuteControl";
 import { SecondaryButton } from "../../../shared/ui/SecondaryButton";
 import { ProjectLogoIcon } from "../../projects/ui/ProjectLogoIcon";
@@ -7,6 +7,12 @@ import { ProjectMascot } from "../../projects/ui/ProjectMascot";
 import { useTabGroupLogos } from "../../projects/hooks/useTabGroupLogos";
 import { useProjectNotificationPreferences } from "../hooks/useProjectNotificationPreferences";
 import { useNotificationProjects } from "../hooks/useNotificationProjects";
+import { MONO_NOTIFICATION_PROJECT } from "../model/notificationProjects";
+import {
+  listMonos,
+  monosSnapshot,
+  subscribeMonos,
+} from "../../monos/model/mono";
 import {
   NOTIFICATION_CATEGORIES,
   isProjectMuted,
@@ -45,9 +51,14 @@ export function ProjectNotificationSettings({
     notificationProjectPath ?? "",
     ...recents.map((project) => project.path),
   ]);
-  const projects = [...notificationProjects.projects].sort((a, b) =>
-    a.name.localeCompare(b.name),
-  );
+  useSyncExternalStore(subscribeMonos, monosSnapshot);
+  // Monos share one row ahead of the projects: none is tied to a project.
+  const projects = [
+    ...(listMonos().length ? [MONO_NOTIFICATION_PROJECT] : []),
+    ...[...notificationProjects.projects].sort((a, b) =>
+      a.name.localeCompare(b.name),
+    ),
+  ];
   const preferences = useProjectNotificationPreferences();
   const groupLogos = useTabGroupLogos();
   const groupColors = loadTabGroupColors();
@@ -202,6 +213,9 @@ export function ProjectNotificationSettings({
                   (category) => {
                     if (project.kind === "linear" || project.kind === "jira")
                       return category.id === "issues";
+                    // Monos notify only for approvals, questions and decision cards.
+                    if (project.kind === "mono")
+                      return category.id === "agentInput";
                     if (project.kind === "local")
                       return !["pullRequests", "issues"].includes(category.id);
                     return true;
@@ -251,7 +265,12 @@ export function ProjectNotificationSettings({
                           className="group flex min-w-0 flex-1 items-center gap-3 rounded-md text-left focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
                         >
                           <span className="grid size-4 shrink-0 place-items-center">
-                            {logoPath ? (
+                            {project.kind === "mono" ? (
+                              <Bot
+                                className="size-4 text-content/40"
+                                aria-hidden="true"
+                              />
+                            ) : logoPath ? (
                               <ProjectLogoIcon
                                 path={logoPath}
                                 className="size-4 rounded-sm"
@@ -286,7 +305,9 @@ export function ProjectNotificationSettings({
                             <p className="mt-1 text-[12px] leading-relaxed text-content/45">
                               {project.kind === "local"
                                 ? "Local project · "
-                                : ""}
+                                : project.kind === "mono"
+                                  ? "Every Mono · "
+                                  : ""}
                               {muted
                                 ? "All notifications paused"
                                 : enabledCount === categories.length

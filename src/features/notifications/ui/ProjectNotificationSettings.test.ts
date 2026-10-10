@@ -8,6 +8,7 @@ import {
 } from "../model/notificationPreferences";
 import { rememberNotificationProjects } from "../model/notificationProjects";
 import { ProjectNotificationSettings } from "./ProjectNotificationSettings";
+import { createMono } from "../../monos/model/mono";
 import { invoke } from "@tauri-apps/api/core";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -362,4 +363,24 @@ it("dismisses the mute menu and custom date picker without changing preferences"
   expect(
     loadNotificationPreferences()["repository:github.com/me/private"],
   ).toBeUndefined();
+});
+
+it("offers one Monos row, for their approvals, questions and cards, once a Mono exists", async () => {
+  await act(async () =>
+    root.render(createElement(ProjectNotificationSettings, { cwd: "" })),
+  );
+  expect(categoriesButton("Monos")).toBeNull();
+
+  await act(async () => {
+    createMono();
+  });
+  act(() => categoriesButton("Monos").click());
+  const input = checkbox("Agent approvals and questions for Monos");
+  expect(
+    input.closest("fieldset")?.querySelectorAll('input[aria-label$=" for Monos"]'),
+  ).toHaveLength(1);
+  act(() => input.click());
+  expect(loadNotificationPreferences().monos).toEqual({
+    disabled: ["agentInput"],
+  });
 });
