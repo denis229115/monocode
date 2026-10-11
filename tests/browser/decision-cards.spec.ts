@@ -150,3 +150,67 @@ test("skipping every question dismisses the card without sending", async ({
   expect(await sent(page)).toEqual([]);
   await proof(page, "dismissed", info.project.name);
 });
+
+test("a card reads link, then question, then options, and says each thing once", async ({
+  page,
+}, info) => {
+  const browser = info.project.name;
+  await page.setViewportSize({ width: 600, height: 800 });
+  await page.goto("/tests/browser/decision-cards.html?only=layout");
+  await page.evaluate(() => document.fonts.ready);
+  const pane = page.locator('[data-pane="layout"]');
+  const panel = pane.locator("[data-decision-card]");
+  const top = async (selector: string) =>
+    (await panel.locator(selector).first().boundingBox())!.y;
+
+  // The PR card comes first, then the question, then the options.
+  await expect(panel).toContainText("Merge this now?");
+  await proof(page, "layout-link", browser);
+  const link = await top("[data-github-work-item-chip]");
+  const question = await top("[data-question-prompt]");
+  const options = await top('[role="group"]');
+  expect(link).toBeLessThan(question);
+  expect(question).toBeLessThan(options);
+
+  // The header that only restated the PR number is gone; the chip says it.
+  await expect(panel.locator("[data-github-work-item-chip]")).toHaveText(
+    "PR #12",
+  );
+  await expect(panel.locator("[data-question-title]")).toHaveText("");
+
+  // A long, multi-paragraph question wraps, keeps its paragraphs, and leaves
+  // the options reachable.
+  await panel.getByRole("button", { name: "Next card" }).click();
+  await expect(panel).toContainText("Which one should I take first?");
+  await proof(page, "layout-long", browser);
+  const prompt = panel.locator("[data-question-prompt]");
+  const box = (await prompt.boundingBox())!;
+  const form = (await panel.locator("form").boundingBox())!;
+  expect(box.x + box.width).toBeLessThanOrEqual(form.x + form.width);
+  expect(
+    await prompt.evaluate((node) => node.scrollWidth <= node.clientWidth),
+  ).toBe(true);
+  expect(
+    await prompt.evaluate((node) => getComputedStyle(node).whiteSpace),
+  ).toBe("pre-line");
+  expect(await prompt.innerText()).toContain("tonight.\n\nFirst,");
+  // The whole card stays inside the window, with the options and Continue
+  // reachable by scrolling the question if it is tall.
+  const viewport = page.viewportSize()!;
+  expect(form.height).toBeLessThan(viewport.height * 0.7);
+  await prompt.evaluate((node) => (node.scrollTop = node.scrollHeight));
+  await expect(
+    panel.getByRole("button", { name: /Windows installer/ }),
+  ).toBeInViewport();
+  await expect(panel.getByRole("button", { name: "Continue" })).toBeInViewport();
+
+  await panel.getByRole("button", { name: "Next card" }).click();
+  await expect(panel).toContainText("What should the PR comment say?");
+  await proof(page, "layout-comment", browser);
+
+  // The settled summary stays compact however long the question was.
+  const settled = pane.locator('[data-decision-summary="settled-long"]');
+  await expect(settled).toContainText("Windows first");
+  expect((await settled.boundingBox())!.height).toBeLessThan(150);
+  await proof(page, "layout-settled", browser);
+});

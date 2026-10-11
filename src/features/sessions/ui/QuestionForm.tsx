@@ -130,8 +130,11 @@ export function QuestionForm({
             className="size-3.5 shrink-0 text-content/45"
             strokeWidth={1.75}
           />
-          <span className="min-w-0 flex-1 truncate text-[11px] text-content/50">
-            {title}
+          <span
+            data-question-title
+            className="min-w-0 flex-1 truncate text-[11px] text-content/50"
+          >
+            {headerRestatesLink(question) ? null : title}
           </span>
           {total > 1 ? (
             <span className="shrink-0 text-[11px] text-content/40">
@@ -287,14 +290,8 @@ function QuestionFields({
 
   return (
     <fieldset className="min-w-0" aria-label={question.header || question.prompt}>
-      <p className="text-[13px] font-medium leading-snug text-content">
-        {question.prompt}
-      </p>
-      {question.multiSelect ? (
-        <p className="mt-0.5 text-[11px] text-content/40">Select all that apply</p>
-      ) : null}
       {question.links?.length ? (
-        <div className="mt-1.5 flex flex-wrap gap-1.5" data-question-links>
+        <div className="flex flex-wrap gap-1.5" data-question-links>
           {question.links.flatMap((url) => {
             const link = parseStandaloneHttpUrl(url);
             if (!link) return [];
@@ -324,11 +321,20 @@ function QuestionFields({
           })}
         </div>
       ) : null}
+      <p
+        data-question-prompt
+        className="mt-1.5 max-h-44 overflow-y-auto whitespace-pre-line break-words text-[13px] font-medium leading-snug text-content first:mt-0"
+      >
+        {question.prompt}
+      </p>
+      {question.multiSelect ? (
+        <p className="mt-0.5 text-[11px] text-content/40">Select all that apply</p>
+      ) : null}
       {options.length === 0 && question.allowCustom ? (
         <input
           value={custom}
           onChange={(event) => onCustom(event.target.value)}
-          placeholder="Type your answer"
+                    placeholder="Type your answer"
           className="mt-1.5 w-full rounded-md border border-content/15 bg-transparent px-2 py-1 text-[12px] text-content outline-none placeholder:text-content/35 focus:border-content/30"
         />
       ) : (
@@ -400,7 +406,7 @@ function QuestionFields({
                   <input
                     value={custom}
                     onChange={(event) => onCustom(event.target.value)}
-                    placeholder="Type your answer"
+                                        placeholder="Type your answer"
                     className="mt-1 w-full rounded-md border border-content/15 bg-transparent px-2 py-1 text-[12px] text-content outline-none placeholder:text-content/35 focus:border-content/30"
                     onClick={(event) => event.stopPropagation()}
                     onFocus={() => {
@@ -415,6 +421,22 @@ function QuestionFields({
       )}
     </fieldset>
   );
+}
+
+/** A header like "PR #12" only repeats the link chip beside it. */
+function headerRestatesLink(question: UserQuestion): boolean {
+  const match = /^(pr|pull request|issue)?\s*#?(\d+)$/i.exec(
+    question.header?.trim() ?? "",
+  );
+  if (!match) return false;
+  const kind = match[1]?.toLowerCase();
+  return (question.links ?? []).some((url) => {
+    const item = parseStandaloneHttpUrl(url)?.githubWorkItem;
+    return (
+      item?.number === Number(match[2]) &&
+      (!kind || (kind === "issue") === (item.kind === "issue"))
+    );
+  });
 }
 
 function displayOptions(question: UserQuestion): UserQuestion["options"] {
