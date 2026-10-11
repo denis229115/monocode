@@ -201,9 +201,12 @@ describe("Codex requests reach the chat and notifications", () => {
       expect(sent.some((message) => message.method === "turn/steer")).toBe(
         false,
       );
+      // "Other" carries a description line, so match it by its start.
       const button = (label: string) =>
-        Array.from(form()!.querySelectorAll("button")).find(
-          (candidate) => candidate.textContent?.trim() === label,
+        Array.from(form()!.querySelectorAll("button")).find((candidate) =>
+          label === "Other"
+            ? candidate.textContent?.trim().startsWith(label)
+            : candidate.textContent?.trim() === label,
         )!;
       expect(button("Continue").disabled).toBe(true);
       if (action === "skip") {

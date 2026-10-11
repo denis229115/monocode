@@ -100,11 +100,11 @@ export function DecisionCardSummary({ card }: { card: DecisionCard }) {
         return (
           <p
             key={question.id}
-            className="mt-1.5 line-clamp-3 text-[13px] leading-snug text-content"
+            className="mt-1.5 text-[13px] leading-snug text-content"
           >
-            {question.prompt}
+            <span className="line-clamp-3 break-words">{question.prompt}</span>
             {outcome?.kind === "answered" ? (
-              <span className="text-content/50">
+              <span className="line-clamp-2 break-words text-content/50">
                 {" → "}
                 {answer.length ? (
                   <span className="font-medium text-content">
