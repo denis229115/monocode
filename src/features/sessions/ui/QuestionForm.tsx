@@ -334,7 +334,8 @@ function QuestionFields({
         <input
           value={custom}
           onChange={(event) => onCustom(event.target.value)}
-                    placeholder="Type your answer"
+          aria-label="Your answer"
+          placeholder="Type your answer"
           className="mt-1.5 w-full rounded-md border border-content/15 bg-transparent px-2 py-1 text-[12px] text-content outline-none placeholder:text-content/35 focus:border-content/30"
         />
       ) : (
@@ -406,7 +407,8 @@ function QuestionFields({
                   <input
                     value={custom}
                     onChange={(event) => onCustom(event.target.value)}
-                                        placeholder="Type your answer"
+                    aria-label="Your answer"
+                    placeholder="Type your answer"
                     className="mt-1 w-full rounded-md border border-content/15 bg-transparent px-2 py-1 text-[12px] text-content outline-none placeholder:text-content/35 focus:border-content/30"
                     onClick={(event) => event.stopPropagation()}
                     onFocus={() => {
@@ -447,7 +449,14 @@ function displayOptions(question: UserQuestion): UserQuestion["options"] {
   ) {
     return question.options;
   }
-  return [...question.options, { id: CUSTOM_OPTION_ID, label: "Other" }];
+  return [
+    ...question.options,
+    {
+      id: CUSTOM_OPTION_ID,
+      label: "Other",
+      description: "Type your own answer",
+    },
+  ];
 }
 
 function customOptionId(question: UserQuestion): string {

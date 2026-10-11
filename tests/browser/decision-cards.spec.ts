@@ -178,6 +178,10 @@ test("a card reads link, then question, then options, and says each thing once",
   );
   await expect(panel.locator("[data-question-title]")).toHaveText("");
 
+  // "Other" explains itself like the options do.
+  const other = panel.getByRole("button", { name: /Other/ });
+  await expect(other).toContainText("Type your own answer");
+
   // A long, multi-paragraph question wraps, keeps its paragraphs, and leaves
   // the options reachable.
   await panel.getByRole("button", { name: "Next card" }).click();
@@ -204,9 +208,11 @@ test("a card reads link, then question, then options, and says each thing once",
   ).toBeInViewport();
   await expect(panel.getByRole("button", { name: "Continue" })).toBeInViewport();
 
+  // The typed answer is labelled for what it is, not by the card header.
   await panel.getByRole("button", { name: "Next card" }).click();
   await expect(panel).toContainText("What should the PR comment say?");
   await proof(page, "layout-comment", browser);
+  await expect(panel.getByRole("textbox", { name: "Your answer" })).toBeVisible();
 
   // The settled summary stays compact however long the question was.
   const settled = pane.locator('[data-decision-summary="settled-long"]');
