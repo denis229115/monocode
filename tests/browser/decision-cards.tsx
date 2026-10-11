@@ -87,6 +87,14 @@ function session(
   };
 }
 
+const longQuestion = [
+  "The release branch has three open problems and I can only fix one before the window closes tonight.",
+  "First, the Windows installer job fails about one run in four. The logs show a timeout while the signing service answers, and it has done the same on main for two weeks. Retrying has worked every time so far, but I cannot prove the signed build is identical when it does.",
+  "Second, the updater test now takes nine minutes instead of three because it downloads the whole fixture bundle on every run. I can cache it, which is a small change, or leave it for the next release and accept slow checks until then.",
+  "Third, the changelog lists the decision cards twice, once under features and once under fixes. Nothing is broken by it, but readers will notice, and fixing it means regenerating the notes by hand.",
+  "Which one should I take first? Whatever you pick, I will finish it, run the whole check suite, and leave the other two for the next card instead of starting them without asking.",
+].join("\n\n");
+
 const initial = [
   session(
     "session",
@@ -158,6 +166,61 @@ const initial = [
       ]),
     ],
   ),
+  session(
+    "layout",
+    "Layout (cards)",
+    "Review the release.",
+    "Three things need you. The first card is already settled.",
+    [
+      {
+        ...card("settled-long", "layout-user", [
+          {
+            header: "Release",
+            question: longQuestion,
+            options: [{ label: "Windows first" }, { label: "Updater first" }],
+          },
+        ]),
+        outcome: {
+          kind: "answered",
+          at: 2,
+          reply: {
+            kind: "answered",
+            answers: { q1: ["Windows first"] },
+            custom: {},
+          },
+        },
+      },
+      card("repeat", "layout-user", [
+        {
+          header: "PR #12",
+          question: "Merge this now?",
+          options: [
+            { label: "Merge now", description: "Checks are green.", recommended: true },
+            { label: "Wait", description: "Hold until Windows is back." },
+          ],
+          links: ["https://github.com/denis229115/monocode/pull/12"],
+        },
+      ]),
+      card("long", "layout-user", [
+        {
+          header: "Release",
+          question: longQuestion,
+          options: [
+            { label: "Windows installer", description: "Take the flaky job first." },
+            { label: "Updater test", description: "Cache the fixture bundle." },
+            { label: "Changelog", description: "Regenerate the notes." },
+          ],
+          links: ["https://github.com/denis229115/monocode/pull/12"],
+        },
+      ]),
+      card("comment", "layout-user", [
+        {
+          header: "Comment",
+          question: "What should the PR comment say?",
+        },
+      ]),
+    ],
+  ),
 ];
 
 function Pane({
@@ -203,7 +266,11 @@ const stored = new Map(
 );
 
 function Fixture() {
-  const [sessions, setSessions] = useState(initial);
+  // ?only=<id> shows one pane, for cases that would crowd the others.
+  const only = new URLSearchParams(location.search).get("only");
+  const [sessions, setSessions] = useState(() =>
+    initial.filter((entry) => (only ? entry.id === only : entry.id !== "layout")),
+  );
   const latest = useRef(sessions);
   latest.current = sessions;
   // The app's own answering, with storage and sending stubbed.
