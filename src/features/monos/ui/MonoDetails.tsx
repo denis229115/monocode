@@ -39,7 +39,11 @@ type Props = {
   model: string;
   modelSettings: Record<string, string>;
   runtimeMode: RuntimeMode;
+  /** The account its conversation runs on, where the provider has several. */
+  accountId?: string;
+  accountRemoved?: boolean;
   busy?: boolean;
+  onAccountChange: (accountId: string) => void;
   onModelChange: (harness: HarnessId, model: string) => void;
   onModelSettingsChange: (settings: Record<string, string>) => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
@@ -62,7 +66,10 @@ export function MonoDetails({
   model,
   modelSettings,
   runtimeMode,
+  accountId,
+  accountRemoved,
   busy = false,
+  onAccountChange,
   onModelChange,
   onModelSettingsChange,
   onRuntimeModeChange,
@@ -207,6 +214,13 @@ export function MonoDetails({
                 hideSettings
                 side="bottom"
                 variant="plain"
+                accountId={accountId}
+                accountNotice={
+                  accountRemoved
+                    ? "Its account was removed, so it uses the default account."
+                    : undefined
+                }
+                onAccountChange={onAccountChange}
                 onChange={onModelChange}
                 onSettingsChange={onModelSettingsChange}
               />
