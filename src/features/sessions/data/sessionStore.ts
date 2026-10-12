@@ -792,13 +792,16 @@ export async function discardDraftSessionRecord(
   monoSavedBlocks.delete(sessionId);
 }
 
+/** Archiving closes the chat's waiting decision cards; returns those cards. */
 export async function setSessionArchived(
   sessionId: string,
   archived: boolean,
-): Promise<void> {
-  await enqueueSessionWrite(sessionId, () =>
-    invoke<void>("session_set_archived", { sessionId, archived }),
+): Promise<DecisionCard[]> {
+  const closed = await enqueueSessionWrite(sessionId, () =>
+    invoke<unknown>("session_set_archived", { sessionId, archived }),
   );
+  if (archived) void refreshSavedWaitingDecisions();
+  return restoreDecisionCards(closed);
 }
 
 export async function setSessionPinned(

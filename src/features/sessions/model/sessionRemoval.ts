@@ -7,6 +7,7 @@ import {
   sessionChildHarnesses,
 } from "./handoff";
 import { flushSessionCheckpoint } from "./checkpoint";
+import { withDecisionCard, type DecisionCard } from "./decisionCard";
 import { isFilesystemTab, type WorkspaceTab } from "../../workspace/model/layout";
 import { orchestrator } from "../../orchestration/model/orchestration";
 import {
@@ -151,6 +152,7 @@ async function removeSession(
 
   if (stopped) await flushSessionCheckpoint(sessionId);
   let savedSummary: SessionSummary | undefined;
+  let closedCards: DecisionCard[] = [];
   if (options.mode === "delete") {
     const imagePaths = stopped?.blocks.flatMap((block) =>
       block.role === "image" && block.image ? [block.image.path] : [],
@@ -168,13 +170,13 @@ async function removeSession(
       if (!saved) throw new Error("The conversation could not be saved.");
       savedSummary = saved;
     }
-    await setSessionArchived(sessionId, true);
+    closedCards = await setSessionArchived(sessionId, true);
   }
 
   const current = options.workspace.snapshot();
-  const removedSession = current.sessions.find(
-    (session) => session.id === sessionId,
-  );
+  const found = current.sessions.find((session) => session.id === sessionId);
+  // A reopened archived chat shows the cards archiving closed as dismissed.
+  const removedSession = found && closedCards.reduce(withDecisionCard, found);
   const confirmed = new Map(plan.closedTabs.map((tab) => [tab.id, tab]));
   const removal = removeSessionFromWorkspace({
     ...current,

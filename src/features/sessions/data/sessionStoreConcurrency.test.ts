@@ -211,11 +211,46 @@ describe("session persistence concurrency", () => {
       "session_upsert",
       "session_upsert",
       "session_set_archived",
+      // Archiving closed any waiting cards, so the saved list is read again.
+      "decision_card_waiting_sessions",
     ]);
     expect(mocks.invoke.mock.calls[1]?.[1]).toMatchObject({
       session: {
         blocks: [{ text: "hello" }, { text: "final buffered output" }],
       },
     });
+  });
+
+  it("returns the cards archiving closed and rereads the waiting list", async () => {
+    const closed = {
+      id: "ask",
+      turnId: "t",
+      askedAt: 1,
+      questions: [
+        { id: "q1", prompt: "Merge now?", options: [], allowCustom: true },
+      ],
+      outcome: { kind: "dismissed", at: 5 },
+    };
+    const commands: string[] = [];
+    mocks.invoke.mockImplementation(async (command: string, args) => {
+      commands.push(command);
+      if (command === "session_set_archived")
+        return args.archived ? [closed] : [];
+      return [];
+    });
+    const { setSessionArchived } = await loadStore();
+
+    const cards = await setSessionArchived("s1", true);
+    expect(cards).toEqual([
+      expect.objectContaining({ id: "ask", outcome: closed.outcome }),
+    ]);
+    expect(commands).toEqual([
+      "session_set_archived",
+      "decision_card_waiting_sessions",
+    ]);
+
+    commands.length = 0;
+    expect(await setSessionArchived("s1", false)).toEqual([]);
+    expect(commands).toEqual(["session_set_archived"]);
   });
 });

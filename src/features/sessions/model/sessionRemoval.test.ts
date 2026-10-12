@@ -7,7 +7,9 @@ import {
   newTerminalFile,
   openTerminalTab,
 } from "../../workspace/model/layout";
-import { newSession, type Session } from "./session";
+import { stopStreaming } from "../../../integrations/harness/core/apply";
+import { parseDecisionQuestions, type DecisionCard } from "./decisionCard";
+import { newSession, sessionNeedsInput, type Session } from "./session";
 import type { SessionWorkspaceRemoval } from "./sessionWorkspaceLifecycle";
 import { createSessionRemover } from "./sessionRemoval";
 
@@ -20,6 +22,15 @@ function deferred() {
     resolve = done;
   });
   return { promise, resolve };
+}
+
+function card(id: string, questions: unknown[]): DecisionCard {
+  return {
+    id,
+    turnId: "user",
+    questions: parseDecisionQuestions(questions),
+    askedAt: 1,
+  };
 }
 
 function fixture(mode: "archive" | "delete", preserveOpenFiles = false) {
@@ -43,9 +54,11 @@ function fixture(mode: "archive" | "delete", preserveOpenFiles = false) {
   state.activeTabId = state.tabs[0].id;
   const confirmClose = vi.fn(async () => true);
   const stop = vi.fn(async () => {});
-  const commit = vi.fn((removal: SessionWorkspaceRemoval) => {
-    state = { ...state, ...removal };
-  });
+  const commit = vi.fn(
+    (removal: SessionWorkspaceRemoval, _session?: Session) => {
+      state = { ...state, ...removal };
+    },
+  );
   mocks.invoke.mockImplementation(async (command, args) => {
     if (command === "session_upsert") {
       return { ...args.session, createdAt: 1, updatedAt: 1 };
@@ -71,7 +84,7 @@ function fixture(mode: "archive" | "delete", preserveOpenFiles = false) {
           apply: (change) => {
             if (change.type === "orchestrationReleased") return;
             if (change.type === "removed") {
-              commit(change.removal);
+              commit(change.removal, change.session);
               return;
             }
             state = {
@@ -276,5 +289,48 @@ it("archives the flushed transcript after cancellation, with streaming stopped",
   expect(mocks.invoke.mock.calls.map(([name]) => name)).toEqual([
     "session_upsert",
     "session_set_archived",
+    "decision_card_waiting_sessions",
   ]);
+});
+
+it("archiving keeps the cards it closed on the chat and sends nothing", async () => {
+  const f = fixture("archive");
+  const waiting = card("ask", [{ question: "Merge now?" }]);
+  const dismissed = {
+    ...card("old", [{ question: "Tag it?" }]),
+    outcome: { kind: "dismissed" as const, at: 2 },
+  };
+  const closing = { ...f.closing, decisionCards: [waiting, dismissed] };
+  f.write({
+    ...f.read(),
+    sessions: f.read().sessions.map((s) => (s.id === closing.id ? closing : s)),
+  });
+  const closed = { ...waiting, outcome: { kind: "dismissed", at: 5 } };
+  const upsert = mocks.invoke.getMockImplementation()!;
+  mocks.invoke.mockImplementation(async (command, args) =>
+    command === "session_set_archived" ? [closed] : upsert(command, args),
+  );
+
+  await f.run();
+  const kept = f.commit.mock.calls[0][1]!;
+  expect(kept.decisionCards).toEqual([closed, dismissed]);
+  expect(sessionNeedsInput(kept)).toBe(false);
+  // No answer went to the agent: the transcript gained no message.
+  expect(kept.blocks.map((block) => block.id)).toEqual(["user", "answer"]);
+  expect(mocks.invoke.mock.calls.map(([name]) => name)).toEqual([
+    "session_upsert",
+    "session_set_archived",
+    "decision_card_waiting_sessions",
+  ]);
+});
+
+it("stopping a chat keeps its waiting cards", async () => {
+  const waiting = card("ask", [{ question: "Merge now?" }]);
+  const stopped = stopStreaming({
+    ...newSession("codex", "/tmp"),
+    busy: true,
+    decisionCards: [waiting],
+  });
+  expect(stopped.decisionCards).toEqual([waiting]);
+  expect(sessionNeedsInput(stopped)).toBe(true);
 });
