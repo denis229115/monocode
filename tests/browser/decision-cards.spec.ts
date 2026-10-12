@@ -220,3 +220,77 @@ test("a card reads link, then question, then options, and says each thing once",
   expect((await settled.boundingBox())!.height).toBeLessThan(150);
   await proof(page, "layout-settled", browser);
 });
+
+for (const [id, cards] of [
+  ["session", ["merge", "notes"]],
+  ["floating", ["first", "when"]],
+] as const) {
+  test(`answers show once in the card, not again as a message (${id})`, async ({
+    page,
+  }, info) => {
+    const browser = info.project.name;
+    await page.setViewportSize({ width: 600, height: 800 });
+    await page.goto(`/tests/browser/decision-cards.html?only=${id}&persist=1`);
+    await page.evaluate(() => document.fonts.ready);
+    const pane = page.locator(`[data-pane="${id}"]`);
+    const panel = pane.locator("[data-decision-card]");
+    const messages = pane.locator("[data-prompt-anchor]");
+    await expect(panel).toBeVisible();
+    await expect(messages).toHaveCount(1);
+    await proof(page, `once-${id}-before`, browser);
+
+    // The first card by its option, the second by a typed answer.
+    await panel.getByRole("button", { name: /Recommended/ }).click();
+    await panel.getByRole("button", { name: "Continue" }).click();
+    await expect(panel.locator("[data-decision-pager]")).toHaveCount(0);
+    await panel.getByRole("button", { name: /Other|Type your own/ }).click();
+    await panel.getByRole("textbox", { name: "Your answer" }).fill("Both, notes first");
+    await panel.getByRole("button", { name: "Continue" }).click();
+    await expect(panel).toHaveCount(0);
+
+    // The agent got both answers as its messages.
+    const texts = (await sent(page)).map((message) => message.text);
+    expect(texts).toHaveLength(2);
+    expect(texts[1]).toContain("Both, notes first");
+    expect(texts.every((text) => text.length > 0)).toBe(true);
+
+    // The answered cards show them; no message repeats them.
+    const summaries = pane.locator("[data-decision-summary]");
+    await expect(summaries).toHaveCount(2);
+    for (const card of cards)
+      await expect(
+        pane.locator(`[data-decision-summary="${card}"]`),
+      ).toHaveAttribute("data-status", "answered");
+    await expect(summaries.last()).toContainText("Both, notes first");
+    await proof(page, `once-${id}-answered`, browser);
+    await expect(messages).toHaveCount(1);
+    await expect(
+      pane.locator("[data-prompt-anchor]").filter({ hasText: "Both, notes first" }),
+    ).toHaveCount(0);
+
+    // A message the user types still shows, even word for word an answer.
+    const composer = pane.locator("[data-composer]");
+    await composer.fill(texts[1]);
+    await composer.press("Enter");
+    await expect(messages).toHaveCount(2);
+    await expect(messages.last()).toContainText("Both, notes first");
+    await composer.fill("Thanks, looks good");
+    await composer.press("Enter");
+    await expect(messages).toHaveCount(3);
+    await expect(messages.last()).toContainText("Thanks, looks good");
+    await proof(page, `once-${id}-typed`, browser);
+
+    // After a reload the answers are still in the cards only.
+    await page.reload();
+    await page.evaluate(() => document.fonts.ready);
+    await expect(pane.locator("[data-decision-summary]")).toHaveCount(2);
+    await expect(
+      pane.locator('[data-decision-summary]').last(),
+    ).toContainText("Both, notes first");
+    await expect(messages).toHaveCount(3);
+    await expect(messages.nth(1)).toContainText("Both, notes first");
+    await expect(messages.nth(2)).toContainText("Thanks, looks good");
+    await expect(panel).toHaveCount(0);
+    await proof(page, `once-${id}-reloaded`, browser);
+  });
+}
