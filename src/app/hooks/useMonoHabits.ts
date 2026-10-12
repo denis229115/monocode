@@ -10,6 +10,7 @@ import {
   listMonos,
   monoLook,
 } from "../../features/monos/model/mono";
+import { monoAccountState } from "../../features/monos/model/monoAccount";
 import { loadMonoFiles } from "../../features/monos/model/monoFiles";
 import {
   artifactCards,
@@ -185,6 +186,9 @@ export function useMonoHabits(host: MonoHabitHost, enabled = true) {
         ),
         title: `${look.name} · ${habit.name}`,
         ephemeral: true,
+        // The run is on the Mono's account, even while a turn keeps its chat
+        // from moving to a newly chosen one.
+        providerAccountId: monoAccountState(record, mono).accountId,
       };
       markHabitRun(run.id, monoId);
       setHabitRunning(habit.id, now);
