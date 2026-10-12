@@ -3,6 +3,7 @@ import { act, createElement, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EditorPane, LayoutNode } from "../model/layout";
+import { newSession, type Session } from "../../sessions/model/session";
 import { PaneTree } from "./PaneTree";
 
 vi.mock("../../files/ui/FilePane", async () => {
@@ -16,12 +17,25 @@ vi.mock("../../files/ui/FilePane", async () => {
   };
 });
 
-vi.mock("../../sessions/ui/SessionPane", () => ({ SessionPane: () => null }));
+const drawn = vi.hoisted(
+  () => new Map<string, { onDecisionAnswer?: unknown }>(),
+);
+
+vi.mock("../../sessions/ui/SessionPane", () => ({
+  SessionPane: (props: {
+    session: { id: string };
+    onDecisionAnswer?: unknown;
+  }) => {
+    drawn.set(props.session.id, props);
+    return null;
+  },
+}));
 
 let container: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
+  drawn.clear();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   container = document.createElement("div");
   document.body.append(container);
@@ -47,13 +61,15 @@ function split(dir: "right" | "down", ...children: LayoutNode[]): LayoutNode {
   };
 }
 
-function render(layout: LayoutNode, ids: string[]) {
+function render(layout: LayoutNode, ids: string[], sessions: Session[] = []) {
   const noop = vi.fn();
   const props: ComponentProps<typeof PaneTree> = {
     visible: true,
     layout,
-    sessions: [],
-    editorPanes: ids.map((id) => ({ id, files: [], activeFileId: "" })),
+    sessions,
+    editorPanes: sessions.length
+      ? []
+      : ids.map((id) => ({ id, files: [], activeFileId: "" })),
     dirtyFileIds: new Set(),
     fileErrorCounts: new Map(),
     focusedId: ids[0],
@@ -84,6 +100,7 @@ function render(layout: LayoutNode, ids: string[]) {
     onResumeQueue: noop,
     onApproval: noop,
     onQuestionReply: noop,
+    onDecisionAnswer: noop,
     onOpenFile: noop,
     onOpenDiff: noop,
     onOpenPlan: noop,
@@ -164,4 +181,32 @@ it("updates file pane visibility when switching workspace tabs", () => {
   expect(pane.getAttribute("data-pane-visible")).toBe("false");
   act(() => root.render(createElement(PaneTree, props)));
   expect(pane.getAttribute("data-pane-visible")).toBe("true");
+});
+
+describe("decision card answers", () => {
+  const chats = ["a", "b"].map((id) => ({
+    ...newSession("codex", "/tmp/project", "codex:test"),
+    id,
+  }));
+
+  it("reach every session pane, in a split too", () => {
+    const props = render(
+      split("right", leaf("a"), leaf("b")),
+      ["a", "b"],
+      chats,
+    );
+    expect(drawn.get("a")?.onDecisionAnswer).toBe(props.onDecisionAnswer);
+    expect(drawn.get("b")?.onDecisionAnswer).toBe(props.onDecisionAnswer);
+  });
+
+  it("follow a new handler instead of being ignored by the memo", () => {
+    const props = render(leaf("a"), ["a"], chats);
+    const next = vi.fn();
+    act(() =>
+      root.render(
+        createElement(PaneTree, { ...props, onDecisionAnswer: next }),
+      ),
+    );
+    expect(drawn.get("a")?.onDecisionAnswer).toBe(next);
+  });
 });
