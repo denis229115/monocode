@@ -250,6 +250,24 @@ it("runs a due habit in a hidden session and posts what it found", async () => {
   expect(stored[0].nextRunAt).toBeGreaterThan(Date.now());
 });
 
+it("runs a habit on the account its Mono chose", async () => {
+  localStorage.setItem(
+    "monocode.providerAccounts.v1",
+    JSON.stringify({
+      claude: [{ id: "account-work", provider: "claude", label: "Work" }],
+    }),
+  );
+  Object.assign(MONO, { accounts: { claude: "account-work" } });
+  try {
+    const host = setup("CI is red.");
+    await vi.waitFor(() => expect(host.add).toHaveBeenCalled());
+    expect(host.add.mock.calls[0][0].providerAccountId).toBe("account-work");
+    await vi.waitFor(() => expect(host.post).toHaveBeenCalled());
+  } finally {
+    delete (MONO as { accounts?: unknown }).accounts;
+  }
+});
+
 it("posts nothing when the run has nothing to say", async () => {
   const host = setup("NOTHING_TO_REPORT");
   await vi.waitFor(() => expect(stored[0].lastOutcome).toBe("quiet"));

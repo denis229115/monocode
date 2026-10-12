@@ -18,6 +18,10 @@ import {
   PROJECT_MASCOTS,
   projectMascot,
 } from "../../projects/model/projectMascots";
+import {
+  supportsAccountProfiles,
+  type ProfileAccountProvider,
+} from "../../providers/model/providerAccounts";
 import { removeMonoBackground } from "./monoBackground";
 
 /** The project palette's colors, plus indigo for a Mono's ninth preset. */
@@ -45,6 +49,11 @@ export type Mono = {
   showStartedSessionsInSidebar?: boolean;
   /** Files the sessions it starts into a sidebar folder named after it. */
   useSidebarFolders?: boolean;
+  /**
+   * The Claude or Codex account it runs on. Absent until one is picked, when
+   * it follows the account selected for the home folder.
+   */
+  accounts?: Partial<Record<ProfileAccountProvider, string>>;
   /** Superseded by SOUL.md; only read once, to seed it. */
   instructions?: string;
   /**
@@ -156,6 +165,14 @@ function parseMono(value: unknown): Mono | undefined {
   const name = text("name");
   const instructions = text("instructions");
   const legacyProject = text("legacyProject");
+  const accounts = Object.fromEntries(
+    Object.entries(record(entry.accounts)).filter(
+      ([provider, id]) =>
+        supportsAccountProfiles(provider as ProfileAccountProvider) &&
+        typeof id === "string" &&
+        !!id,
+    ),
+  ) as NonNullable<Mono["accounts"]>;
   return {
     id: entry.id,
     ...(sessionId ? { sessionId } : {}),
@@ -171,6 +188,7 @@ function parseMono(value: unknown): Mono | undefined {
       ? { showStartedSessionsInSidebar: entry.showStartedSessionsInSidebar }
       : {}),
     ...(entry.useSidebarFolders === true ? { useSidebarFolders: true } : {}),
+    ...(Object.keys(accounts).length ? { accounts } : {}),
     ...(instructions ? { instructions } : {}),
     ...(legacyProject ? { legacyProject } : {}),
   };
@@ -313,6 +331,17 @@ export function saveMonoName(monoId: string, name: string): void {
 
 export function saveMonoMascot(monoId: string, mascot: string): void {
   updateMono(monoId, (mono) => ({ ...mono, mascot }));
+}
+
+export function saveMonoAccount(
+  monoId: string,
+  provider: ProfileAccountProvider,
+  accountId: string,
+): void {
+  updateMono(monoId, (mono) => ({
+    ...mono,
+    accounts: { ...mono.accounts, [provider]: accountId },
+  }));
 }
 
 export function addMonoProject(monoId: string, path: string): void {
