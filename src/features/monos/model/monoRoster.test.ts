@@ -11,6 +11,7 @@ import {
   removeMono,
   removeMonoProject,
   reorderMonos,
+  saveMonoAccount,
 } from "./mono";
 import { monoBackgroundKey, monoChatBackground } from "./monoBackground";
 import { saveProjectChatBackgroundSettings } from "../../projects/model/projectChatBackground";
@@ -75,4 +76,33 @@ it("forgets its background along with the Mono", () => {
   expect(monoChatBackground(mono.id)?.path).toBe("/bg/mono.png");
   removeMono(mono.id);
   expect(monoChatBackground(mono.id)).toBeNull();
+});
+
+it("keeps a Mono's account across a restart and loads Monos saved without one", () => {
+  const mono = createMono();
+  expect(findMono(mono.id)?.accounts).toBeUndefined();
+  saveMonoAccount(mono.id, "claude", "account-work");
+  saveMonoAccount(mono.id, "codex", "default");
+  expect(findMono(mono.id)?.accounts).toEqual({
+    claude: "account-work",
+    codex: "default",
+  });
+  // Another Mono is untouched, and stored junk is dropped.
+  const other = createMono();
+  expect(findMono(other.id)?.accounts).toBeUndefined();
+  localStorage.setItem(
+    "monocode:mono-roster",
+    JSON.stringify([
+      { id: "old", mascot: "cat", color: "#fff", projects: [] },
+      {
+        id: "odd",
+        mascot: "cat",
+        color: "#fff",
+        projects: [],
+        accounts: { claude: 5, devin: "account-x", codex: "account-a" },
+      },
+    ]),
+  );
+  expect(listMonos()[0]).not.toHaveProperty("accounts");
+  expect(listMonos()[1].accounts).toEqual({ codex: "account-a" });
 });
