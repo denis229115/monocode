@@ -203,6 +203,7 @@ import {
   type InboxSessionPortal,
 } from "./InboxDiscussionPanel";
 import { inboxAskKey } from "../model/inboxAsk";
+import type { InboxMonoChoice } from "../model/inboxMono";
 
 const MIN_WIDTH = 240;
 const MAX_WIDTH = 420;
@@ -360,6 +361,12 @@ function InboxDetailTab({
   );
 }
 
+type InboxStartInMono = (
+  item: InboxItem,
+  monoId: string,
+  body?: string,
+) => void | Promise<void>;
+
 type CiRepairProps = {
   repairSessions?: readonly SessionSummary[];
   onRepairChecks?: (
@@ -380,6 +387,10 @@ type Props = {
   onClose?: () => void;
   onToggleSidebar?: () => void;
   onStart?: (item: InboxItem, body?: string) => void | Promise<void>;
+  /** Sends the item to a Mono's chat instead of a new one. */
+  onStartInMono?: InboxStartInMono;
+  /** The Monos to offer; absent when Monos are off. */
+  monos?: readonly InboxMonoChoice[];
   repairSessions?: CiRepairProps["repairSessions"];
   onRepairChecks?: CiRepairProps["onRepairChecks"];
   sessions?: readonly SessionSummary[];
@@ -401,6 +412,8 @@ export function InboxView({
   onClose,
   onToggleSidebar,
   onStart,
+  onStartInMono,
+  monos,
   repairSessions,
   onRepairChecks,
   sessions = [],
@@ -1174,6 +1187,8 @@ export function InboxView({
               }
               onDiscuss={() => setDiscussionOpen(true)}
               onStart={onStart}
+              onStartInMono={onStartInMono}
+              monos={monos}
               repairSessions={repairSessions}
               onRepairChecks={onRepairChecks}
               onOpenSession={onOpenSession}
@@ -1413,6 +1428,8 @@ function InboxDetailBody({
   relatedSessions,
   onDiscuss,
   onStart,
+  onStartInMono,
+  monos,
   repairSessions,
   onRepairChecks,
   onOpenSession,
@@ -1425,6 +1442,8 @@ function InboxDetailBody({
   relatedSessions: readonly SessionSummary[];
   onDiscuss?: () => void;
   onStart?: (item: InboxItem, body?: string) => void | Promise<void>;
+  onStartInMono?: InboxStartInMono;
+  monos?: readonly InboxMonoChoice[];
   repairSessions?: CiRepairProps["repairSessions"];
   onRepairChecks?: CiRepairProps["onRepairChecks"];
   onOpenSession?: (sessionId: string) => void | Promise<void>;
@@ -1448,6 +1467,8 @@ function InboxDetailBody({
       relatedSessions={relatedSessions}
       onDiscuss={onDiscuss}
       onStart={onStart}
+      onStartInMono={onStartInMono}
+      monos={monos}
       repairSessions={repairSessions}
       onRepairChecks={onRepairChecks}
       onOpenSession={onOpenSession}
@@ -2001,6 +2022,8 @@ export function InboxDetail({
   visible = true,
   onDiscuss,
   onStart,
+  onStartInMono,
+  monos,
   repairSessions,
   onRepairChecks,
   onOpenSession,
@@ -2015,6 +2038,8 @@ export function InboxDetail({
   visible?: boolean;
   onDiscuss?: () => void;
   onStart?: (item: InboxItem, body?: string) => void | Promise<void>;
+  onStartInMono?: InboxStartInMono;
+  monos?: readonly InboxMonoChoice[];
   repairSessions?: CiRepairProps["repairSessions"];
   onRepairChecks?: CiRepairProps["onRepairChecks"];
   onOpenSession?: (sessionId: string) => void | Promise<void>;
@@ -2129,6 +2154,38 @@ export function InboxDetail({
   const [startError, setStartError] = useState<string | null>(null);
   const chooseStartProject =
     tracker || ((gitlab || azuredevops) && !item.projectPath);
+  const startWith = (
+    start: (item: InboxItem, body?: string) => void | Promise<void>,
+  ) => {
+    if (starting) return;
+    setStarting(true);
+    setStartError(null);
+    const next = chooseStartProject
+      ? { ...item, projectPath: startProject }
+      : item;
+    void Promise.resolve(start(next, tracker ? details?.body : undefined))
+      .catch((err: unknown) => {
+        setStartError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => setStarting(false));
+  };
+  const splitSend = !!monos && !!onStartInMono;
+  const sendButton = onStart ? (
+    <button
+      type="button"
+      disabled={
+        starting ||
+        (chooseStartProject &&
+          (projects.length === 0 || !startProject || loading || !!error))
+      }
+      onClick={() => startWith(onStart)}
+      className={`${ACTION_FILLED} disabled:cursor-default disabled:opacity-40${
+        splitSend ? " rounded-r-none" : ""
+      }`}
+    >
+      {starting ? "Sending..." : "Send to agent"}
+    </button>
+  ) : null;
   const status = tracker
     ? item.state || inboxItemStatus(item)
     : inboxItemStatus(item);
@@ -2794,37 +2851,22 @@ export function InboxDetail({
               <div className="flex flex-wrap items-center gap-2 pt-0.5">
                 {onStart && item.kind !== "pr" ? (
                   <>
-                    <button
-                      type="button"
-                      disabled={
-                        starting ||
-                        (chooseStartProject &&
-                          (projects.length === 0 ||
-                            !startProject ||
-                            loading ||
-                            !!error))
-                      }
-                      onClick={() => {
-                        if (starting) return;
-                        setStarting(true);
-                        setStartError(null);
-                        const next = chooseStartProject
-                          ? { ...item, projectPath: startProject }
-                          : item;
-                        void Promise.resolve(
-                          onStart(next, tracker ? details?.body : undefined),
-                        )
-                          .catch((err: unknown) => {
-                            setStartError(
-                              err instanceof Error ? err.message : String(err),
-                            );
-                          })
-                          .finally(() => setStarting(false));
-                      }}
-                      className={`${ACTION_FILLED} disabled:cursor-default disabled:opacity-40`}
-                    >
-                      {starting ? "Sending..." : "Send to agent"}
-                    </button>
+                    {splitSend ? (
+                      <div className="inline-flex">
+                        {sendButton}
+                        <SendToMonoMenu
+                          monos={monos}
+                          disabled={starting}
+                          onChoose={(monoId) =>
+                            startWith((_, body) =>
+                              onStartInMono?.(item, monoId, body),
+                            )
+                          }
+                        />
+                      </div>
+                    ) : (
+                      sendButton
+                    )}
                     {chooseStartProject ? (
                       <InboxProjectPicker
                         projects={projects}
@@ -3156,6 +3198,95 @@ function InboxPerson({
         </span>
       )}
       <span className="min-w-0 truncate">{name}</span>
+    </span>
+  );
+}
+
+/** The chevron beside "Send to agent": hand the item to a Mono instead. */
+function SendToMonoMenu({
+  monos,
+  disabled,
+  onChoose,
+}: {
+  monos: readonly InboxMonoChoice[];
+  disabled: boolean;
+  onChoose: (monoId: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const group = useRef<HTMLSpanElement>(null);
+  const item =
+    "flex h-7 w-full items-center rounded-md px-2 text-left text-[12px] text-content/80 hover:bg-content/5 hover:text-content disabled:cursor-default disabled:text-content/40 disabled:hover:bg-transparent";
+  const choose = (monoId: string) => {
+    setOpen(false);
+    onChoose(monoId);
+  };
+  return (
+    <span ref={group} className="inline-flex">
+      <button
+        type="button"
+        title="Send options"
+        aria-label="Send options"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        disabled={disabled}
+        onClick={() => setOpen((next) => !next)}
+        className="grid h-6.5 w-6 place-items-center rounded-r-md border-l border-background-base/20 bg-content text-background-base hover:bg-content/80 disabled:cursor-default disabled:opacity-40"
+      >
+        <ChevronDown className="size-3" strokeWidth={1.75} />
+      </button>
+      {open ? (
+        <Popover
+          anchor={group}
+          gap={4}
+          width={220}
+          autoFocus
+          onDismiss={() => setOpen(false)}
+          role="menu"
+          tabIndex={-1}
+          aria-label="Send to"
+          className="p-1"
+        >
+          {monos.length === 0 ? (
+            <>
+              <button type="button" role="menuitem" disabled className={item}>
+                Send to Mono
+              </button>
+              <p className="px-2 pb-1 text-[11px] leading-snug text-content/45">
+                No Mono yet. Create one from the sidebar first.
+              </p>
+            </>
+          ) : monos.length === 1 ? (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => choose(monos[0].id)}
+              className={item}
+            >
+              Send to Mono
+              <span className="ml-auto min-w-0 truncate pl-2 text-content/40">
+                {monos[0].name}
+              </span>
+            </button>
+          ) : (
+            <>
+              <p className="px-2 pb-0.5 pt-1 text-[11px] text-content/45">
+                Send to Mono
+              </p>
+              {monos.map((mono) => (
+                <button
+                  key={mono.id}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => choose(mono.id)}
+                  className={item}
+                >
+                  <span className="min-w-0 truncate">{mono.name}</span>
+                </button>
+              ))}
+            </>
+          )}
+        </Popover>
+      ) : null}
     </span>
   );
 }
