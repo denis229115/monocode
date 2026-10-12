@@ -123,6 +123,8 @@ import type { SessionFolderTarget } from "../model/sessionFolders";
 import { markLinkedSessionUpdateSeen } from "../../inbox/model/linkedSessionSeen";
 import { RemoteSession } from "../../connections/ui/RemoteSession";
 import { isRemoteProjectPath } from "../../projects/model/recents";
+import { requestSessionAccount } from "../../providers/model/sessionAccountRequest";
+import { useSessionAccountId } from "./ModelAccountSwitch";
 import type { HostSession } from "../../connections/model/protocol";
 
 export type SessionPaneProps = {
@@ -376,6 +378,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
     orchestrator.snapshot,
     orchestrator.snapshot,
   );
+  const accountId = useSessionAccountId(session);
   const managed = orchestrationRuns.some(
     (run) =>
       (run.status === "active" || run.status === "paused") &&
@@ -718,6 +721,8 @@ const LocalSessionPane = memo(function LocalSessionPane({
       worktreeRemoved={session.worktreeRemoved}
       onManageWorktrees={onManageWorktrees}
       onNewTerminal={() => onNewTerminal(session.id)}
+      accountId={accountId}
+      onAccountChange={(next) => requestSessionAccount(session.id, next)}
       onModelChange={(harness, model) => {
         onModelChange(session.id, harness, model);
         const selected = resolveModel(harness, model);
