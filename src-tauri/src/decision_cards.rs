@@ -96,7 +96,8 @@ pub(crate) fn claim(
     })
 }
 
-/// Gives back a claim whose answer could not be sent, so the card waits again.
+/// Gives back a claim whose answer could not be sent, so the card waits again;
+/// in an archived chat, which waits on no one, it is dismissed instead.
 /// Another caller's outcome is left alone.
 pub(crate) fn release(
     conn: &Connection,
@@ -110,12 +111,24 @@ pub(crate) fn release(
     if card.get("outcome") != Some(outcome) {
         return Ok(Some(card));
     }
+    let archived = conn
+        .query_row(
+            "SELECT archived FROM sessions WHERE id = ?1",
+            [session_id],
+            |row| row.get::<_, bool>(0),
+        )
+        .optional()?
+        .unwrap_or(false);
     if let Some(fields) = card.as_object_mut() {
-        fields.remove("outcome");
+        if archived {
+            fields.insert("outcome".into(), dismissed(session_store::now_millis()));
+        } else {
+            fields.remove("outcome");
+        }
     }
     conn.execute(
-        "UPDATE decision_cards SET card_json = ?3, waiting = 1 WHERE session_id = ?1 AND card_id = ?2",
-        params![session_id, card_id, card.to_string()],
+        "UPDATE decision_cards SET card_json = ?3, waiting = ?4 WHERE session_id = ?1 AND card_id = ?2",
+        params![session_id, card_id, card.to_string(), !archived],
     )?;
     stored(conn, session_id, card_id)
 }
@@ -170,17 +183,25 @@ pub(crate) fn dismiss_waiting(
         .collect::<rusqlite::Result<_>>()?;
     let mut closed = Vec::new();
     for (card_id, raw) in waiting {
-        let Ok(mut card) = serde_json::from_str::<Value>(&raw) else {
-            continue;
-        };
-        card["outcome"] = serde_json::json!({ "kind": "dismissed", "at": at });
+        // A row that is not a card can never be shown or answered: it stops
+        // waiting as it is, so it is not found again.
+        let mut card = serde_json::from_str::<Value>(&raw)
+            .ok()
+            .filter(Value::is_object);
+        if let Some(fields) = card.as_mut().and_then(Value::as_object_mut) {
+            fields.insert("outcome".into(), dismissed(at));
+        }
         conn.execute(
             "UPDATE decision_cards SET card_json = ?3, waiting = 0 WHERE session_id = ?1 AND card_id = ?2",
-            params![session_id, card_id, card.to_string()],
+            params![session_id, card_id, card.as_ref().map_or(raw, |card| card.to_string())],
         )?;
-        closed.push(card);
+        closed.extend(card);
     }
     Ok(closed)
+}
+
+fn dismissed(at: i64) -> Value {
+    serde_json::json!({ "kind": "dismissed", "at": at })
 }
 
 /// Chats archived before archiving closed their cards: close those cards the
@@ -301,6 +322,12 @@ mod tests {
     fn conn() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         ensure_table(&conn).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE sessions (id TEXT PRIMARY KEY, worktree_removed INTEGER NOT NULL,
+               archived INTEGER NOT NULL DEFAULT 0);
+             CREATE TABLE orchestration_workers (session_id TEXT PRIMARY KEY, lead_id TEXT NOT NULL);",
+        )
+        .unwrap();
         conn
     }
 
@@ -365,10 +392,7 @@ mod tests {
     fn lists_sessions_with_a_waiting_card_while_their_worktree_stands() {
         let conn = conn();
         conn.execute_batch(
-            "CREATE TABLE sessions (id TEXT PRIMARY KEY, worktree_removed INTEGER NOT NULL,
-               archived INTEGER NOT NULL DEFAULT 0);
-             CREATE TABLE orchestration_workers (session_id TEXT PRIMARY KEY, lead_id TEXT NOT NULL);
-             INSERT INTO sessions (id, worktree_removed) VALUES
+            "INSERT INTO sessions (id, worktree_removed) VALUES
                ('waiting', 0), ('settled', 0), ('removed', 0), ('both', 0), ('worker', 0);
              INSERT INTO orchestration_workers VALUES ('worker', 'lead');",
         )
@@ -414,30 +438,80 @@ mod tests {
 
     fn archived_sessions(conn: &Connection) {
         conn.execute_batch(
-            "CREATE TABLE sessions (id TEXT PRIMARY KEY, worktree_removed INTEGER NOT NULL,
-               archived INTEGER NOT NULL);
-             CREATE TABLE orchestration_workers (session_id TEXT PRIMARY KEY, lead_id TEXT NOT NULL);
-             INSERT INTO sessions VALUES ('open', 0, 0), ('old', 0, 1), ('older', 0, 1);",
+            "INSERT INTO sessions VALUES ('open', 0, 0), ('old', 0, 1), ('older', 0, 1);",
         )
         .unwrap();
     }
 
     #[test]
-    fn an_archived_chat_waits_on_no_one_even_for_a_card_given_back() {
+    fn an_archived_chat_waits_on_no_one() {
         let conn = conn();
         archived_sessions(&conn);
         ask(&conn, "open", &json!({"id": "a", "turnId": "t"})).unwrap();
+        // However a card came to wait there, the chat is not listed.
         ask(&conn, "old", &json!({"id": "a", "turnId": "t"})).unwrap();
-        // An answer that could not be sent after the chat was archived.
-        let yes = json!({"kind": "answered", "at": 1});
-        claim(&conn, "old", "a", &yes).unwrap();
-        release(&conn, "old", "a", &yes).unwrap();
         let listed: Vec<String> = waiting_sessions(&conn)
             .unwrap()
             .into_iter()
             .map(|row| row.session_id)
             .collect();
         assert_eq!(listed, ["open"]);
+    }
+
+    #[test]
+    fn an_answer_given_back_in_an_archived_chat_dismisses_the_card() {
+        let conn = conn();
+        archived_sessions(&conn);
+        ask(&conn, "old", &json!({"id": "a", "turnId": "t"})).unwrap();
+        // The chat was archived while the answer was being sent, and it failed.
+        let yes = json!({"kind": "answered", "at": 1});
+        claim(&conn, "old", "a", &yes).unwrap();
+        let card = release(&conn, "old", "a", &yes).unwrap().unwrap();
+        assert_eq!(card["outcome"]["kind"], "dismissed");
+        assert!(card["outcome"]["at"].as_i64().unwrap() > 1);
+        assert!(list(&conn, "old", &HashSet::new(), true)
+            .unwrap()
+            .is_empty());
+        // Unarchived later, it still waits on no one.
+        conn.execute("UPDATE sessions SET archived = 0 WHERE id = 'old'", [])
+            .unwrap();
+        assert!(waiting_sessions(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn startup_closes_rows_that_are_not_cards_without_failing_once() {
+        let conn = conn();
+        archived_sessions(&conn);
+        ask(&conn, "old", &json!({"id": "a", "turnId": "t"})).unwrap();
+        conn.execute_batch(
+            "INSERT INTO decision_cards VALUES
+               ('old', 'list', '[1, 2]', 1),
+               ('old', 'number', '7', 1),
+               ('old', 'text', '\"ask\"', 1),
+               ('old', 'broken', '{not json', 1);",
+        )
+        .unwrap();
+        assert_eq!(dismiss_archived(&conn, 7).unwrap(), 1);
+        let rows: Vec<(String, bool)> = conn
+            .prepare(
+                "SELECT card_json, waiting FROM decision_cards WHERE card_id != 'a' ORDER BY rowid",
+            )
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        // Kept as they were, but no longer waiting, so they are not found again.
+        assert_eq!(
+            rows,
+            [
+                ("[1, 2]".into(), false),
+                ("7".into(), false),
+                ("\"ask\"".into(), false),
+                ("{not json".into(), false),
+            ]
+        );
+        assert_eq!(dismiss_archived(&conn, 9).unwrap(), 0);
     }
 
     #[test]
