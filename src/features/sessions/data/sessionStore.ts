@@ -294,6 +294,7 @@ function sanitizeQueuedMessages(value: unknown): QueuedMessage[] {
         ...(noteCard ? { noteCard } : {}),
         ...(handoffCard ? { handoffCard } : {}),
         ...(completion ? { monoSessionCompletion: completion } : {}),
+        ...(message.decisionAnswer ? { decisionAnswer: true } : {}),
         ...(["default", "plan", "build", "orchestrate"].includes(
           message.intent ?? "",
         )
@@ -952,6 +953,7 @@ function sanitizeBlock(
   // Without this the transcript would show the app's orchestration turns as
   // the user's own after a reload.
   if (block.role === "user" && block.internal) next.internal = true;
+  if (block.role === "user" && block.decisionAnswer) next.decisionAnswer = true;
   const completion = sanitizeMonoSessionCompletion(block.monoSessionCompletion);
   if (block.role === "user" && block.internal && completion)
     next.monoSessionCompletion = completion;

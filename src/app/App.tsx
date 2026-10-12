@@ -862,6 +862,8 @@ type SubmitOptions = ComposerTurnOptions & {
   managed?: boolean;
   orchestrationRetry?: OrchestrationProposal;
   appRequestId?: string;
+  /** The answers to a decision card; the transcript hides this message. */
+  decisionAnswer?: boolean;
   monoSessionCompletion?: Block["monoSessionCompletion"];
   onSettled?: (outcome: ControlOutcome) => void;
   /** Generate a fresh title even when this is not the session's first turn. */
@@ -923,6 +925,14 @@ function userTurnCards(
     ...(secondOpinion ? { secondOpinion } : {}),
     ...(noteCard ? { noteCard: noteCardMeta(noteCard) } : {}),
   };
+}
+
+/** Marks the message that carries a decision card's answers. */
+function decisionAnswerCards(
+  cards: ReturnType<typeof userTurnCards>,
+  decisionAnswer: boolean | undefined,
+) {
+  return decisionAnswer ? { ...cards, decisionAnswer: true } : cards;
 }
 
 function withHarnessChoice(
@@ -7029,8 +7039,12 @@ function Workspace({
                   noteCard,
                   handoffCard,
                   intent,
+                  ...(options?.decisionAnswer ? { decisionAnswer: true } : {}),
                 },
-                rawCommand ? undefined : userTurnCards(noteCard),
+                decisionAnswerCards(
+                  rawCommand ? undefined : userTurnCards(noteCard),
+                  options?.decisionAnswer,
+                ),
               )
             : session,
         );
@@ -7097,7 +7111,10 @@ function Workspace({
                 mode: "follow-up",
                 text: submittedText,
                 attachments: displayAttachments(attachments),
-                cards: userTurnCards(noteCard),
+                cards: decisionAnswerCards(
+                  userTurnCards(noteCard),
+                  options?.decisionAnswer,
+                ),
               }),
             );
             flushHarnessEvents();
@@ -7166,6 +7183,9 @@ function Workspace({
                         noteCard,
                         handoffCard,
                         intent,
+                        ...(options?.decisionAnswer
+                          ? { decisionAnswer: true }
+                          : {}),
                       },
                     ],
                     queueStatus:
@@ -7189,7 +7209,10 @@ function Workspace({
         }
         dismissNoticesForContinuedSession(sessionId);
         const visible = displayAttachments(attachments);
-        const cards = userTurnCards(noteCard);
+        const cards = decisionAnswerCards(
+          userTurnCards(noteCard),
+          options?.decisionAnswer,
+        );
         const nextSessions = sessionsRef.current.map((s) => {
           if (s.id !== sessionId) return s;
           let next: Session = {
@@ -7377,6 +7400,7 @@ function Workspace({
         ...(options?.managed || options?.monoSessionCompletion
           ? { internal: true }
           : {}),
+        ...(options?.decisionAnswer ? { decisionAnswer: true } : {}),
         ...(options?.monoSessionCompletion
           ? { monoSessionCompletion: options.monoSessionCompletion }
           : {}),
@@ -8907,6 +8931,7 @@ function Workspace({
                 noteCard: head.noteCard,
                 handoffCard: head.handoffCard,
                 intent: head.intent,
+                ...(head.decisionAnswer ? { decisionAnswer: true } : {}),
                 ...(head.monoSessionCompletion
                   ? {
                       monoSessionCompletion: head.monoSessionCompletion,
@@ -9063,6 +9088,7 @@ function Workspace({
         noteCard: message.noteCard,
         handoffCard: message.handoffCard,
         intent: message.intent,
+        ...(message.decisionAnswer ? { decisionAnswer: true } : {}),
       });
     },
     [onSubmit, enqueueHarnessEvent, flushHarnessEvents],
@@ -10257,6 +10283,7 @@ function Workspace({
       send: async (sessionId, text) => {
         const accepted = await submitSessionRef.current(sessionId, text, [], {
           followUpBehavior: "queue",
+          decisionAnswer: true,
         });
         if (!accepted) return false;
         // The card is already saved as answered; save the message carrying

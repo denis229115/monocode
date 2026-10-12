@@ -1456,7 +1456,11 @@ function AgentTranscriptComponent({
               className={`transcript-turn flex min-w-0 flex-col${inlineWork && !reactedOnly ? " transcript-turn-mono" : ""}${stacksIntoNextTurn ? " -mb-1" : ""}${
                 isLastTurn ? " transcript-turn-live" : ""
               }${
-                promptAnchor && anchorTurn && isLastTurn && userBlock
+                promptAnchor &&
+                anchorTurn &&
+                isLastTurn &&
+                userBlock &&
+                !userBlock.decisionAnswer
                   ? " transcript-turn-anchor"
                   : ""
               }`}
