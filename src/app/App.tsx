@@ -1,6 +1,10 @@
 import { sessionConversationPage } from "../features/agent-app/model/sessionConversation";
 import { readMonoConversation } from "../features/monos/model/monoConversation";
 import {
+  monoAccountState,
+  pickMonoAccount,
+} from "../features/monos/model/monoAccount";
+import {
   resumeMonoUsageLimit,
   switchMonoUsageLimitAccount,
 } from "../features/monos/model/monoUsageLimit";
@@ -438,6 +442,7 @@ import {
   DEFAULT_PROVIDER_ACCOUNT_ID,
   providerAccountExists,
   selectedProviderAccountId,
+  selectProviderAccount,
   supportsProviderAccounts,
   type ProviderAccountProvider,
 } from "../features/providers/model/providerAccounts";
@@ -582,6 +587,8 @@ import {
   writeAgentFile,
 } from "../features/monos/model/monoFiles";
 import { useMonoHabits } from "./hooks/useMonoHabits";
+import { useMonoAccounts } from "./hooks/useMonoAccounts";
+import { subscribeSessionAccountRequests } from "../features/providers/model/sessionAccountRequest";
 import { useFloatingMono } from "./hooks/useFloatingMono";
 import {
   dropRelays,
@@ -1344,6 +1351,7 @@ function Workspace({
 
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
+  useMonoAccounts(sessions, setSessions, monosSnap);
   const linkedSessionUpdatesRef = useRef<
     ReadonlyMap<string, LinkedSessionUpdate>
   >(new Map());
@@ -1974,37 +1982,49 @@ function Workspace({
     void refreshHarnessCatalogs([activeHarness]);
   }, [activeHarness]);
 
+  // A Mono in full view is what the usage chip describes, on its own account.
+  const usageTarget = monoViewSession ?? active;
   const usageProviders = useMemo(() => {
     if (
-      active?.harness === "claude" ||
-      active?.harness === "codex" ||
-      active?.harness === "opencode" ||
-      active?.harness === "devin"
+      usageTarget?.harness === "claude" ||
+      usageTarget?.harness === "codex" ||
+      usageTarget?.harness === "opencode" ||
+      usageTarget?.harness === "devin"
     ) {
-      return [active.harness];
+      return [usageTarget.harness];
     }
     return [];
-  }, [active?.harness]);
+  }, [usageTarget?.harness]);
   const usageSession = useMemo(() => {
-    if (!active) return undefined;
+    if (!usageTarget) return undefined;
+    const mono = monoViewSession && monoForSession(monoViewSession.id);
     return {
-      id: active.id,
-      harness: active.harness,
-      model: active.model,
-      authRequired: latestTurnNeedsHarnessLogin(active.blocks),
+      id: usageTarget.id,
+      harness: usageTarget.harness,
+      model: usageTarget.model,
+      authRequired: latestTurnNeedsHarnessLogin(usageTarget.blocks),
       providerAccountId:
-        active.providerAccountId ??
-        (active.blocks.some((block) => block.role === "user")
+        (mono ? monoAccountState(mono, usageTarget).accountId : undefined) ??
+        usageTarget.providerAccountId ??
+        (usageTarget.blocks.some((block) => block.role === "user")
           ? DEFAULT_PROVIDER_ACCOUNT_ID
           : undefined),
     };
   }, [
-    active?.id,
-    active?.harness,
-    active?.model,
-    active?.blocks,
-    active?.providerAccountId,
+    usageTarget?.id,
+    usageTarget?.harness,
+    usageTarget?.model,
+    usageTarget?.blocks,
+    usageTarget?.providerAccountId,
+    monoViewSession,
+    monosSnap,
   ]);
+  const onPickMonoAccount = monoViewSession
+    ? (provider: ProviderAccountProvider, accountId: string) => {
+        const mono = monoForSession(monoViewSession.id);
+        if (mono) pickMonoAccount(mono.id, provider, accountId);
+      }
+    : undefined;
   const activeProviderSignInRequest = useMemo(() => {
     if (
       !active ||
@@ -2669,6 +2689,28 @@ function Workspace({
       setComposerFocused(true);
     },
     [active?.id, appendTab],
+  );
+
+  // The model selector in a conversation's composer asks for another account.
+  useEffect(
+    () =>
+      subscribeSessionAccountRequests((sessionId, accountId) => {
+        const session = sessionsRef.current.find(
+          (entry) => entry.id === sessionId,
+        );
+        if (
+          !session ||
+          !supportsProviderAccounts(session.harness) ||
+          !providerAccountExists(session.harness, accountId)
+        )
+          return;
+        const mono = monoForSession(sessionId);
+        if (mono) return pickMonoAccount(mono.id, session.harness, accountId);
+        selectProviderAccount(session.harness, session.cwd, accountId);
+        if (active?.id === sessionId)
+          onSelectProviderAccount(session.harness, accountId);
+      }),
+    [active?.id, onSelectProviderAccount],
   );
 
   const onOpenWhatsNew = useCallback((version: string) => {
@@ -9140,6 +9182,8 @@ function Workspace({
             : entry,
         ),
       );
+      const mono = monoForSession(sessionId);
+      if (mono) pickMonoAccount(mono.id, session.harness, accountId);
     },
     [],
   );
@@ -12659,6 +12703,10 @@ function Workspace({
         windowControls={monoCovers && !IS_MAC ? <WindowControls /> : undefined}
       />
     ) : null;
+  const monoAccount =
+    monoViewMono && monoViewSession
+      ? monoAccountState(monoViewMono, monoViewSession)
+      : { removed: false };
   const monoSettingsDialog =
     monoCovers &&
     monoViewMono &&
@@ -12674,7 +12722,12 @@ function Workspace({
         model={monoViewSession.model}
         modelSettings={monoViewSession.modelSettings}
         runtimeMode={monoViewSession.runtimeMode}
+        accountId={monoAccount.accountId}
+        accountRemoved={monoAccount.removed}
         busy={!!monoViewSession.busy}
+        onAccountChange={(accountId) =>
+          pickMonoAccount(monoViewMono.id, monoViewSession.harness, accountId)
+        }
         onModelChange={(harness, model) =>
           onModelChange(monoViewSession.id, harness, model)
         }
@@ -13323,13 +13376,13 @@ function Workspace({
               inboxViewOpen ||
               notesViewOpen ||
               automationsViewOpen ||
-              settingsOpen ||
-              monoCovers ? null : (
+              settingsOpen ? null : (
                 <UsageFooter
                   providers={usageProviders}
                   session={usageSession}
-                  project={active?.cwd ?? projectCwd}
+                  project={usageTarget?.cwd ?? projectCwd}
                   onSelectAccount={onSelectProviderAccount}
+                  onPickAccount={onPickMonoAccount}
                   onManageAccounts={() =>
                     openSettings("providers", "provider-accounts")
                   }

@@ -1227,6 +1227,10 @@ const LocalSessionPane = memo(function LocalSessionPane({
                           hideSettings
                           hotkeys={focused && !btw.open}
                           variant="text"
+                          accountId={accountId}
+                          onAccountChange={(next) =>
+                            requestSessionAccount(session.id, next)
+                          }
                           onChange={(harness, model) =>
                             onModelChange(session.id, harness, model)
                           }
