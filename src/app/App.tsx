@@ -714,6 +714,10 @@ import type { LinkedSessionUpdate } from "../features/inbox/model/linkedSessionU
 import { markLinkedSessionUpdateSeen } from "../features/inbox/model/linkedSessionSeen";
 import { inboxTrackerDescription } from "../features/inbox/model/inboxContext";
 import {
+  inboxMonoChoices,
+  inboxMonoMessage,
+} from "../features/inbox/model/inboxMono";
+import {
   gitlabWorkItemDetails,
   peekGitlabWorkItemDetails,
 } from "../features/inbox/model/gitlab";
@@ -1298,6 +1302,11 @@ function Workspace({
     () => true,
   );
   const monosSnap = useSyncExternalStore(subscribeMonos, monosSnapshot);
+  const inboxMonos = useMemo(
+    () => inboxMonoChoices(listMonos()),
+    // The roster is read through its snapshot.
+    [monosSnap],
+  );
   /** A Mono hides the terminal, so reaching for one leaves it. */
   const leaveCoveringMono = useCallback(() => {
     if (monoViewIdRef.current) closeMonoView();
@@ -8486,6 +8495,26 @@ function Workspace({
     [appendTab, focusOpenSession, submitSession],
   );
 
+  /** The item lands in the Mono's chat as a typed message would, and it opens. */
+  const onSendInboxItemToMono = useCallback(
+    async (item: InboxItem, monoId: string, body?: string) => {
+      const text = inboxMonoMessage(
+        item,
+        await inboxTrackerDescription(item, body),
+      );
+      await onOpenMono(monoId);
+      const sessionId = findMono(monoId)?.sessionId;
+      if (
+        !sessionId ||
+        !sessionsRef.current.some((session) => session.id === sessionId)
+      )
+        throw new Error("That Mono is no longer available.");
+      if (!(await submitSession(sessionId, text)))
+        throw new Error("The Mono could not take the message.");
+    },
+    [onOpenMono, submitSession],
+  );
+
   const queueMonoSessionCompletion = useCallback(
     async (
       monoId: string,
@@ -13181,6 +13210,10 @@ function Workspace({
                   onClose={onLeaveInbox}
                   onToggleSidebar={onToggleSidebar}
                   onStart={onStartInboxItem}
+                  onStartInMono={
+                    monosEnabled ? onSendInboxItemToMono : undefined
+                  }
+                  monos={monosEnabled ? inboxMonos : undefined}
                   onAsk={onAskInboxItem}
                   onAskRestart={onRestartInboxAsk}
                   onAskMount={setInboxAskPortal}

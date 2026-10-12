@@ -323,6 +323,54 @@ describe("InboxDetail layout", () => {
     expect(header).not.toContain("overflow-y-auto");
   });
 
+  it("adds a send-options chevron beside Send to agent only when Monos are on", () => {
+    const render = (extra: Record<string, unknown>) =>
+      renderToStaticMarkup(
+        createElement(InboxDetail, {
+          item: item(),
+          cwd: "/tmp/web",
+          projects: [],
+          revision: 0,
+          relatedSessions: [],
+          onStart: () => {},
+          ...extra,
+        }),
+      );
+    const plain = render({});
+    expect(plain).toContain("Send to agent");
+    expect(plain).not.toContain("Send options");
+
+    const withMonos = render({
+      onStartInMono: () => {},
+      monos: [{ id: "m1", name: "Pixi" }],
+    });
+    expect(withMonos).toContain("Send to agent");
+    expect(withMonos).toContain('aria-label="Send options"');
+    // The menu stays closed until the chevron is pressed.
+    expect(withMonos).not.toContain("Send to Mono");
+    // Even with no Mono, the chevron is there to explain itself.
+    expect(render({ onStartInMono: () => {}, monos: [] })).toContain(
+      'aria-label="Send options"',
+    );
+  });
+
+  it("keeps Send to agent off pull requests, chevron included", () => {
+    const html = renderToStaticMarkup(
+      createElement(InboxDetail, {
+        item: item({ kind: "pr", number: 9 }),
+        cwd: "/tmp/web",
+        projects: [],
+        revision: 0,
+        relatedSessions: [],
+        onStart: () => {},
+        onStartInMono: () => {},
+        monos: [{ id: "m1", name: "Pixi" }],
+      }),
+    );
+    expect(html).not.toContain("Send to agent");
+    expect(html).not.toContain("Send options");
+  });
+
   it("shows why a remote GitLab item needs attention and asks for a workspace", () => {
     const markup = renderDetail(
       item({
