@@ -20,9 +20,10 @@ const log = async (page: Page) =>
     handOver: boolean;
   }[];
 
-const details = (page: Page) => page.locator("[data-mono-details]");
 const trigger = (page: Page) =>
-  details(page).locator("button[aria-keyshortcuts]");
+  page.locator("[data-mono-model] button[aria-keyshortcuts]");
+const settingsTrigger = (page: Page) =>
+  page.locator("[data-mono-settings] button[aria-keyshortcuts]");
 const accounts = (page: Page) =>
   page.getByRole("radiogroup", { name: "Account" });
 const radios = (page: Page) => accounts(page).getByRole("radio");
@@ -89,8 +90,8 @@ test("the usage chip picks the Mono's account too", async ({ page }) => {
 test("a Mono whose account was removed uses the default and says so", async ({
   page,
 }, info) => {
-  await open(page, "?removed=1");
-  await trigger(page).click();
+  await open(page, "?removed=1&settings=1");
+  await settingsTrigger(page).click();
   await expect(page.locator("[data-model-account-notice]")).toHaveText(
     "Its account was removed, so it uses the default account.",
   );
