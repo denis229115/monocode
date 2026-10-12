@@ -66,6 +66,7 @@ export function UsageFooter({
   onShowTerminal,
   projectTerminalActive = false,
   onSelectAccount,
+  onPickAccount,
   onManageAccounts,
 }: {
   providers: RateLimitProvider[];
@@ -78,6 +79,11 @@ export function UsageFooter({
   onShowTerminal?: () => void;
   projectTerminalActive?: boolean;
   onSelectAccount?: (
+    provider: ProviderAccountProvider,
+    accountId: string,
+  ) => void;
+  /** Takes the choice instead of the folder's selection, as a Mono's own does. */
+  onPickAccount?: (
     provider: ProviderAccountProvider,
     accountId: string,
   ) => void;
@@ -283,10 +289,11 @@ export function UsageFooter({
 
   const selectAccount = useCallback(
     (provider: ProviderAccountProvider, accountId: string) => {
+      if (onPickAccount) return onPickAccount(provider, accountId);
       selectProviderAccount(provider, project, accountId);
       onSelectAccount?.(provider, accountId);
     },
-    [onSelectAccount, project],
+    [onPickAccount, onSelectAccount, project],
   );
 
   const addAccount = useCallback(
