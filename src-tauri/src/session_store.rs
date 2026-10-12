@@ -43,6 +43,8 @@ impl SessionStore {
             .map_err(|e| e.to_string())?;
         migrate(&conn).map_err(|e| e.to_string())?;
         crate::worktrees::reconcile_removals(&conn)?;
+        // Before any window reads the waiting list, so its first read is clean.
+        crate::decision_cards::dismiss_archived(&conn, now_millis()).map_err(|e| e.to_string())?;
         let read_conn = Connection::open(&path).map_err(|e| e.to_string())?;
         read_conn
             .execute_batch("PRAGMA query_only = ON; PRAGMA busy_timeout = 5000;")
@@ -535,7 +537,7 @@ pub fn session_set_archived(
     store: State<'_, SessionStore>,
     session_id: String,
     archived: bool,
-) -> Result<(), String> {
+) -> Result<Vec<Value>, String> {
     validate_id(&session_id, "session")?;
     let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
     set_archived(&conn, &session_id, archived).map_err(|e| e.to_string())
@@ -1877,12 +1879,25 @@ fn delete_session(conn: &Connection, session_id: &str) -> rusqlite::Result<()> {
     tx.commit()
 }
 
-fn set_archived(conn: &Connection, session_id: &str, archived: bool) -> rusqlite::Result<()> {
-    conn.execute(
+/// Archiving also closes the chat's waiting decision cards, in the same
+/// transaction, and returns them; unarchiving leaves them closed.
+fn set_archived(
+    conn: &Connection,
+    session_id: &str,
+    archived: bool,
+) -> rusqlite::Result<Vec<Value>> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
         "UPDATE sessions SET archived = ?1 WHERE id = ?2",
         params![if archived { 1 } else { 0 }, session_id],
     )?;
-    Ok(())
+    let closed = if archived {
+        crate::decision_cards::dismiss_waiting(&tx, session_id, now_millis())?
+    } else {
+        Vec::new()
+    };
+    tx.commit()?;
+    Ok(closed)
 }
 
 fn set_pinned(conn: &Connection, session_id: &str, pinned: bool) -> rusqlite::Result<()> {
@@ -2935,6 +2950,56 @@ mod tests {
     }
 
     #[test]
+    fn archiving_closes_waiting_cards_and_unarchiving_leaves_them_closed() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.conn.lock().unwrap();
+        upsert_session(&conn, &sample("s1", "/tmp/a", "First")).unwrap();
+        upsert_session(&conn, &sample("s2", "/tmp/a", "Second")).unwrap();
+        let cards = crate::decision_cards::ask;
+        cards(&conn, "s1", &json!({"id": "waiting", "turnId": "t"})).unwrap();
+        cards(&conn, "s1", &json!({"id": "answered", "turnId": "t"})).unwrap();
+        cards(&conn, "s1", &json!({"id": "dismissed", "turnId": "t"})).unwrap();
+        cards(&conn, "s2", &json!({"id": "settled", "turnId": "t"})).unwrap();
+        let answer = json!({"kind": "answered", "at": 1, "reply": {"answers": {"q1": ["yes"]}}});
+        let dismiss = json!({"kind": "dismissed", "at": 2});
+        crate::decision_cards::claim(&conn, "s1", "answered", &answer).unwrap();
+        crate::decision_cards::claim(&conn, "s1", "dismissed", &dismiss).unwrap();
+        crate::decision_cards::claim(&conn, "s2", "settled", &dismiss).unwrap();
+        let rows = |session: &str| -> Vec<(String, String, bool)> {
+            conn.prepare(
+                "SELECT card_id, card_json, waiting FROM decision_cards WHERE session_id = ?1 ORDER BY rowid",
+            )
+            .unwrap()
+            .query_map([session], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+        };
+        let before = rows("s1");
+
+        let closed = set_archived(&conn, "s1", true).unwrap();
+        assert_eq!(closed.len(), 1);
+        assert_eq!(closed[0]["id"], "waiting");
+        assert_eq!(closed[0]["outcome"]["kind"], "dismissed");
+        assert!(closed[0]["outcome"]["at"].as_i64().unwrap() > 0);
+        let after = rows("s1");
+        assert_eq!(after[0], ("waiting".into(), closed[0].to_string(), false));
+        // Settled cards keep their outcome byte for byte.
+        assert_eq!(after[1..], before[1..]);
+
+        // Nothing waiting: archiving closes nothing and changes no card.
+        let settled = rows("s2");
+        assert!(set_archived(&conn, "s2", true).unwrap().is_empty());
+        assert_eq!(rows("s2"), settled);
+
+        // Unarchiving brings nothing back, and archiving again closes nothing.
+        assert!(set_archived(&conn, "s1", false).unwrap().is_empty());
+        assert_eq!(rows("s1"), after);
+        assert!(set_archived(&conn, "s1", true).unwrap().is_empty());
+        assert_eq!(rows("s1"), after);
+    }
+
+    #[test]
     fn migration_v11_adds_pinned_column() {
         let store = SessionStore::open_in_memory().unwrap();
         let conn = store.conn.lock().unwrap();
@@ -3322,6 +3387,40 @@ mod tests {
             .iter()
             .any(|hit| hit.session_id == "s1" && hit.kind == "conversation"));
         drop(conn);
+        drop(store);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn opening_the_store_closes_cards_of_chats_archived_by_an_earlier_build() {
+        let path = std::env::temp_dir().join(format!(
+            "monocode-archived-cards-{}-{}.db",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        {
+            let store = SessionStore::open(path.clone()).unwrap();
+            let conn = store.conn.lock().unwrap();
+            upsert_session(&conn, &sample("s1", "/tmp/a", "Finished")).unwrap();
+            crate::decision_cards::ask(&conn, "s1", &json!({"id": "a", "turnId": "t"})).unwrap();
+            // An earlier build archived without closing the card.
+            conn.execute("UPDATE sessions SET archived = 1 WHERE id = 's1'", [])
+                .unwrap();
+        }
+        let cards = |store: &SessionStore, turns: &[&str]| {
+            let turns = turns.iter().copied().collect();
+            crate::decision_cards::list(&store.conn.lock().unwrap(), "s1", &turns, true).unwrap()
+        };
+        let store = SessionStore::open(path.clone()).unwrap();
+        assert!(cards(&store, &[]).is_empty());
+        assert_eq!(cards(&store, &["t"])[0]["outcome"]["kind"], "dismissed");
+        drop(store);
+        // A second start finds nothing left to close.
+        let store = SessionStore::open(path.clone()).unwrap();
+        assert!(cards(&store, &[]).is_empty());
         drop(store);
         let _ = std::fs::remove_file(&path);
     }

@@ -154,6 +154,56 @@ pub(crate) fn block_ids(blocks: &[Value]) -> HashSet<&str> {
         .collect()
 }
 
+/// Closes the session's waiting cards as dismissed, sending nothing, as
+/// archiving does. Returns the cards it closed.
+pub(crate) fn dismiss_waiting(
+    conn: &Connection,
+    session_id: &str,
+    at: i64,
+) -> rusqlite::Result<Vec<Value>> {
+    let waiting: Vec<(String, String)> = conn
+        .prepare(
+            "SELECT card_id, card_json FROM decision_cards
+             WHERE session_id = ?1 AND waiting = 1 ORDER BY rowid",
+        )?
+        .query_map([session_id], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut closed = Vec::new();
+    for (card_id, raw) in waiting {
+        let Ok(mut card) = serde_json::from_str::<Value>(&raw) else {
+            continue;
+        };
+        card["outcome"] = serde_json::json!({ "kind": "dismissed", "at": at });
+        conn.execute(
+            "UPDATE decision_cards SET card_json = ?3, waiting = 0 WHERE session_id = ?1 AND card_id = ?2",
+            params![session_id, card_id, card.to_string()],
+        )?;
+        closed.push(card);
+    }
+    Ok(closed)
+}
+
+/// Chats archived before archiving closed their cards: close those cards the
+/// same way, once. After that nothing matches, so a later start changes
+/// nothing. Returns how many cards it closed.
+pub(crate) fn dismiss_archived(conn: &Connection, at: i64) -> rusqlite::Result<usize> {
+    let tx = conn.unchecked_transaction()?;
+    let sessions: Vec<String> = tx
+        .prepare(
+            "SELECT DISTINCT cards.session_id FROM decision_cards cards
+             JOIN sessions ON sessions.id = cards.session_id
+             WHERE cards.waiting = 1 AND sessions.archived = 1",
+        )?
+        .query_map([], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut closed = 0;
+    for session_id in sessions {
+        closed += dismiss_waiting(&tx, &session_id, at)?.len();
+    }
+    tx.commit()?;
+    Ok(closed)
+}
+
 pub(crate) fn delete_for_session(conn: &Connection, session_id: &str) -> rusqlite::Result<()> {
     conn.execute(
         "DELETE FROM decision_cards WHERE session_id = ?1",
@@ -173,13 +223,14 @@ pub struct WaitingSession {
 }
 
 /// Sessions with a card still waiting, for chats not yet loaded. A card being
-/// delivered or settled is no longer waiting.
+/// delivered or settled is no longer waiting, and an archived chat waits on
+/// no one, even for a card given back after it was archived.
 fn waiting_sessions(conn: &Connection) -> rusqlite::Result<Vec<WaitingSession>> {
     let mut statement = conn.prepare(
         "SELECT DISTINCT cards.session_id, workers.lead_id FROM decision_cards cards
          JOIN sessions ON sessions.id = cards.session_id
          LEFT JOIN orchestration_workers workers ON workers.session_id = cards.session_id
-         WHERE cards.waiting = 1 AND sessions.worktree_removed = 0
+         WHERE cards.waiting = 1 AND sessions.worktree_removed = 0 AND sessions.archived = 0
          ORDER BY cards.session_id",
     )?;
     let rows = statement.query_map([], |row| {
@@ -314,9 +365,10 @@ mod tests {
     fn lists_sessions_with_a_waiting_card_while_their_worktree_stands() {
         let conn = conn();
         conn.execute_batch(
-            "CREATE TABLE sessions (id TEXT PRIMARY KEY, worktree_removed INTEGER NOT NULL);
+            "CREATE TABLE sessions (id TEXT PRIMARY KEY, worktree_removed INTEGER NOT NULL,
+               archived INTEGER NOT NULL DEFAULT 0);
              CREATE TABLE orchestration_workers (session_id TEXT PRIMARY KEY, lead_id TEXT NOT NULL);
-             INSERT INTO sessions VALUES
+             INSERT INTO sessions (id, worktree_removed) VALUES
                ('waiting', 0), ('settled', 0), ('removed', 0), ('both', 0), ('worker', 0);
              INSERT INTO orchestration_workers VALUES ('worker', 'lead');",
         )
@@ -357,6 +409,69 @@ mod tests {
         assert_eq!(
             waiting_sessions(&conn).unwrap(),
             [waiting("waiting", None), waiting("worker", Some("lead"))]
+        );
+    }
+
+    fn archived_sessions(conn: &Connection) {
+        conn.execute_batch(
+            "CREATE TABLE sessions (id TEXT PRIMARY KEY, worktree_removed INTEGER NOT NULL,
+               archived INTEGER NOT NULL);
+             CREATE TABLE orchestration_workers (session_id TEXT PRIMARY KEY, lead_id TEXT NOT NULL);
+             INSERT INTO sessions VALUES ('open', 0, 0), ('old', 0, 1), ('older', 0, 1);",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn an_archived_chat_waits_on_no_one_even_for_a_card_given_back() {
+        let conn = conn();
+        archived_sessions(&conn);
+        ask(&conn, "open", &json!({"id": "a", "turnId": "t"})).unwrap();
+        ask(&conn, "old", &json!({"id": "a", "turnId": "t"})).unwrap();
+        // An answer that could not be sent after the chat was archived.
+        let yes = json!({"kind": "answered", "at": 1});
+        claim(&conn, "old", "a", &yes).unwrap();
+        release(&conn, "old", "a", &yes).unwrap();
+        let listed: Vec<String> = waiting_sessions(&conn)
+            .unwrap()
+            .into_iter()
+            .map(|row| row.session_id)
+            .collect();
+        assert_eq!(listed, ["open"]);
+    }
+
+    #[test]
+    fn startup_closes_cards_of_chats_archived_earlier_once() {
+        let conn = conn();
+        archived_sessions(&conn);
+        for (session, card) in [("open", "a"), ("old", "a"), ("old", "b"), ("older", "a")] {
+            ask(&conn, session, &json!({"id": card, "turnId": "t"})).unwrap();
+        }
+        let yes = json!({"kind": "answered", "at": 1});
+        claim(&conn, "older", "a", &yes).unwrap();
+        let answered = stored(&conn, "older", "a").unwrap();
+
+        assert_eq!(dismiss_archived(&conn, 7).unwrap(), 2);
+        assert!(list(&conn, "old", &HashSet::new(), true)
+            .unwrap()
+            .is_empty());
+        let old = list(&conn, "old", &["t"].into_iter().collect(), false).unwrap();
+        assert_eq!(ids(&old), ["a", "b"]);
+        for card in &old {
+            assert_eq!(card["outcome"], json!({"kind": "dismissed", "at": 7}));
+        }
+        // An answered card and an open chat's card are left as they were.
+        assert_eq!(stored(&conn, "older", "a").unwrap(), answered);
+        assert!(stored(&conn, "open", "a")
+            .unwrap()
+            .unwrap()
+            .get("outcome")
+            .is_none());
+        // A second start finds nothing to close.
+        assert_eq!(dismiss_archived(&conn, 9).unwrap(), 0);
+        assert_eq!(
+            stored(&conn, "old", "a").unwrap().unwrap()["outcome"]["at"],
+            7
         );
     }
 
