@@ -3,6 +3,7 @@ import {
   activePromptId,
   barLift,
   previewLines,
+  promptBlocks,
   promptPreview,
 } from "./promptOutline";
 import type { Block } from "./session";
@@ -136,5 +137,24 @@ describe("promptPreview", () => {
 
   it("returns null for an unknown prompt", () => {
     expect(promptPreview([], "missing")).toBeNull();
+  });
+});
+
+describe("promptBlocks", () => {
+  const block = (id: string, role: Block["role"], text: string): Block => ({
+    id,
+    role,
+    text,
+  });
+
+  it("lists what the user typed, not app turns or decision answers", () => {
+    const blocks: Block[] = [
+      block("u1", "user", "Ship it"),
+      { ...block("u2", "user", "Which branch?\nmain"), decisionAnswer: true },
+      { ...block("u3", "user", "Keep going"), internal: true },
+      block("a1", "assistant", "Done"),
+      block("u4", "user", "Thanks"),
+    ];
+    expect(promptBlocks(blocks).map((entry) => entry.id)).toEqual(["u1", "u4"]);
   });
 });

@@ -389,6 +389,30 @@ describe("sanitizeSessionForPersist", () => {
     });
   });
 
+  it("keeps the mark on a decision card's answer message, and only there", () => {
+    const answered = appendUser(
+      newSession("codex", "/repo"),
+      "Which branch?\nmain",
+      [],
+      { decisionAnswer: true },
+    );
+    const typed = appendUser(answered, "Which branch?\nmain");
+    const saved = sanitizeSessionForPersist(typed).blocks;
+    expect(saved[0]).toMatchObject({ decisionAnswer: true });
+    expect(saved[1]).not.toHaveProperty("decisionAnswer");
+  });
+
+  it("keeps the mark on an answer still waiting in the queue", () => {
+    const session = newSession("codex", "/repo");
+    session.queuedMessages = [
+      { id: "a", text: "Which branch?\nmain", attachments: [], decisionAnswer: true },
+      { id: "b", text: "Typed", attachments: [] },
+    ];
+    const saved = sanitizeSessionForPersist(session).queuedMessages;
+    expect(saved?.[0]).toMatchObject({ id: "a", decisionAnswer: true });
+    expect(saved?.[1]).not.toHaveProperty("decisionAnswer");
+  });
+
   it("persists the request ID for an agent-sent follow-up", () => {
     const submitted = appendUser(newSession("codex", "/repo"), "Continue", [], {
       appRequestId: "app-source-request-1",
