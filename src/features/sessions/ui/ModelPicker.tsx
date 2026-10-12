@@ -48,6 +48,12 @@ import { HARNESSES, HARNESS_TITLE, type HarnessId } from "../model/session";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { LAYER } from "../../../shared/lib/layers";
 import { HarnessIcon } from "./HarnessIcon";
+import {
+  ModelAccountSwitch,
+  accountTriggerLabel,
+  useModelAccount,
+  type ModelAccount,
+} from "./ModelAccountSwitch";
 import { Popover } from "../../../shared/ui/Popover";
 import { MOD } from "../../../platform/tauri/platform";
 import { keybindingPressed } from "../../settings/model/settings";
@@ -70,6 +76,14 @@ type Props = {
   variant?: "pill" | "plain";
   /** Action label for recovery surfaces that open the same model chooser. */
   triggerLabel?: string;
+  /**
+   * The account this surface runs on, for Claude and Codex with several
+   * accounts: shown beside the model and switchable in the list.
+   */
+  accountId?: string;
+  /** Said under the accounts, such as that the chosen one was removed. */
+  accountNotice?: string;
+  onAccountChange?: (accountId: string) => void;
   onChange: (harness: HarnessId, model: string) => void;
   onSettingsChange: (settings: Record<string, string>) => void;
   onClose?: () => void;
@@ -277,6 +291,9 @@ export function ModelPicker({
   side = "top",
   variant = "pill",
   triggerLabel,
+  accountId,
+  accountNotice,
+  onAccountChange,
   onChange,
   onSettingsChange,
   onClose,
@@ -350,11 +367,19 @@ export function ModelPicker({
   const triggerEffortLabel = triggerEffortSetting
     ? settingValueLabel(triggerEffortSetting, values)
     : undefined;
+  const account = useModelAccount(
+    current.harness,
+    accountId,
+    accountNotice,
+    onAccountChange,
+  );
+  const triggerAccountLabel = accountTriggerLabel(account);
   const triggerTitle = [
     HARNESS_TITLE[current.harness],
     current.provider?.name,
     current.name,
     triggerEffortLabel,
+    triggerAccountLabel,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -695,7 +720,7 @@ export function ModelPicker({
           current.provider ? `, ${current.provider.name},` : ""
         } ${current.name}${
           triggerEffortLabel ? `, effort ${triggerEffortLabel}` : ""
-        }`}
+        }${triggerAccountLabel ? `, account ${triggerAccountLabel}` : ""}`}
         aria-keyshortcuts={`${MOD}.`}
         aria-expanded={open || recentMenu != null}
         aria-haspopup={hideSettings ? "dialog" : "menu"}
@@ -734,6 +759,13 @@ export function ModelPicker({
             {triggerEffortLabel}
           </span>
         ) : null}
+        {!triggerLabel && triggerAccountLabel ? (
+          <span
+            className={`max-w-24 shrink-0 truncate text-content/50 ${variant === "plain" ? "" : "text-[11px]"}`}
+          >
+            · {triggerAccountLabel}
+          </span>
+        ) : null}
         <ChevronDown
           className={`size-3 shrink-0 text-content/50 ${open ? "rotate-180" : ""}`}
           strokeWidth={1.75}
@@ -759,6 +791,7 @@ export function ModelPicker({
           onActive={setActiveModel}
           onPick={pickModel}
           onToggleFavorite={toggleFavorite}
+          account={account}
         />
       ) : null}
 
@@ -955,6 +988,7 @@ export function ModelPicker({
               onActive={setActiveModel}
               onPick={pickModel}
               onToggleFavorite={toggleFavorite}
+              account={account}
             />
           ) : null}
         </>
@@ -1402,6 +1436,7 @@ function ModelFlyout({
   onActive,
   onPick,
   onToggleFavorite,
+  account,
 }: {
   anchor: HTMLButtonElement | { current: HTMLButtonElement | null };
   side?: "right" | "top" | "bottom";
@@ -1420,6 +1455,8 @@ function ModelFlyout({
   onActive: (index: number) => void;
   onPick: (model: AgentModel) => void;
   onToggleFavorite: (id: string) => void;
+  /** Shown under the search while browsing the provider it belongs to. */
+  account?: ModelAccount;
 }) {
   const source = useModelSource();
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
@@ -1560,6 +1597,10 @@ function ModelFlyout({
             onKeyDown={onSearchKey}
           />
         </label>
+
+        {account && tab === account.harness ? (
+          <ModelAccountSwitch account={account} />
+        ) : null}
 
         <div
           ref={lockOverscroll}
