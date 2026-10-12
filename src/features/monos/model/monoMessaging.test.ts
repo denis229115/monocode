@@ -216,3 +216,28 @@ describe("optimistic Mono messages", () => {
     expect(accepted.blocks[0].text).toBe("legacy");
   });
 });
+
+describe("a decision card's answer to a Mono", () => {
+  it("keeps its mark from the waiting bubble through delivery", () => {
+    const answer: QueuedMessage = { ...message("answer"), decisionAnswer: true };
+    const waiting = enqueueMonoMessage(newSession("codex", "/tmp"), answer, {
+      decisionAnswer: true,
+    });
+    expect(waiting.blocks[0]).toMatchObject({ id: "answer", decisionAnswer: true });
+    const delivered = acknowledgeMonoMessage(waiting, waiting.queuedMessages![0], {
+      mode: "new-turn",
+      cards: { decisionAnswer: true },
+    });
+    expect(delivered.blocks).toHaveLength(1);
+    expect(delivered.blocks[0]).toMatchObject({ id: "answer", decisionAnswer: true });
+  });
+
+  it("leaves a typed message unmarked", () => {
+    const waiting = enqueueMonoMessage(
+      newSession("codex", "/tmp"),
+      message("typed"),
+    );
+    expect(waiting.blocks[0]).not.toHaveProperty("decisionAnswer");
+  });
+});
+

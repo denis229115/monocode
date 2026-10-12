@@ -69,9 +69,14 @@ export class TranscriptTurnCache {
     const key = JSON.stringify([settled, managed, inlineWork, undelivered]);
     const previous = variants?.get(key);
     if (previous) return previous;
+    // The answered card shows a decision's answers, so the message that
+    // carried them to the agent never reads as a second bubble.
     const visible = (blocks: Block[]) =>
       blocks.filter(
-        (block) => !block.orchestration && (managed || !block.internal),
+        (block) =>
+          !block.orchestration &&
+          !block.decisionAnswer &&
+          (managed || !block.internal),
       );
     // Each run in a merged Mono turn folds on its own: an earlier answer is
     // not narration for the work that the next run went on to do.
