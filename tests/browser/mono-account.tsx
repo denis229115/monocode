@@ -7,7 +7,8 @@ import {
 } from "../../src/features/providers/model/sessionAccountRequest";
 import { UsageFooter } from "../../src/app/shell/UsageFooter";
 import { useMonoAccounts } from "../../src/app/hooks/useMonoAccounts";
-import { MonoDetails } from "../../src/features/monos/ui/MonoDetails";
+import { MonoSettingsDialog } from "../../src/features/monos/ui/MonoSettingsDialog";
+import { useSessionAccountId } from "../../src/features/sessions/ui/ModelAccountSwitch";
 import {
   createMono,
   monoForSession,
@@ -43,7 +44,8 @@ Object.assign(window, {
 });
 
 // ?accounts=one leaves only the default login; ?removed=1 gives Pixi an
-// account that no longer exists; ?harness=devin has no profiles at all.
+// account that no longer exists; ?harness=devin has no profiles at all;
+// ?settings=1 opens the Mono's settings dialog over it.
 const params = new URLSearchParams(location.search);
 const harness = (params.get("harness") ?? "claude") as HarnessId;
 const MODEL: Partial<Record<HarnessId, string>> = {
@@ -125,8 +127,18 @@ function Fixture() {
   const session = sessions.find((entry) => entry.id === selected)!;
   const mono = monoForSession(selected)!;
   const account = monoAccountState(mono, session);
+  const composerAccount = useSessionAccountId(session);
   const pick = (provider: ProviderAccountProvider, accountId: string) =>
     pickMonoAccount(mono.id, provider, accountId);
+  // The app's side of a composer's request: a Mono's chat takes its account.
+  useEffect(
+    () =>
+      subscribeSessionAccountRequests((id, next) => {
+        const owner = monoForSession(id);
+        if (owner) pickMonoAccount(owner.id, harness, next);
+      }),
+    [],
+  );
   return (
     <div data-fixture className="flex h-[560px] w-[900px] flex-col bg-background-base">
       <div className="flex min-h-0 flex-1">
@@ -143,12 +155,30 @@ function Fixture() {
             </button>
           ))}
         </div>
-        <MonoDetails
-          open
+      </div>
+      {/* Beneath a Mono's composer: asks the app, which hands it to the Mono. */}
+      <div
+        data-mono-model
+        className="flex h-9 items-center border-t border-stroke px-4"
+      >
+        <ModelPicker
+          harness={session.harness}
+          model={session.model}
+          values={session.modelSettings}
+          hideSettings
+          variant="text"
+          accountId={composerAccount}
+          onAccountChange={(next) => requestSessionAccount(session.id, next)}
+          onChange={() => {}}
+          onSettingsChange={() => {}}
+        />
+      </div>
+      {params.get("settings") ? (
+        <MonoSettingsDialog
           monoId={mono.id}
-          cwd={session.cwd}
           agent={monoLook(mono)}
-          state={{ status: "idle" }}
+          status="idle"
+          cwd={session.cwd}
           harness={session.harness}
           model={session.model}
           modelSettings={session.modelSettings}
@@ -163,7 +193,7 @@ function Fixture() {
           onRuntimeModeChange={() => {}}
           onClose={() => {}}
         />
-      </div>
+      ) : null}
       {params.get("chat") ? <ChatComposer /> : null}
       <UsageFooter
         providers={[session.harness as "claude"]}
