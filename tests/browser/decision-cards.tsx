@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { AgentTranscript } from "../../src/features/sessions/ui/AgentTranscript";
 import { DecisionCardPanel } from "../../src/features/sessions/ui/DecisionCards";
@@ -10,6 +10,12 @@ import {
   type DecisionCard,
 } from "../../src/features/sessions/model/decisionCard";
 import { decisionAnswerer } from "../../src/features/sessions/model/decisionAnswers";
+import { MONO_COLORS } from "../../src/features/monos/model/mono";
+import { PROJECT_MASCOTS } from "../../src/features/projects/model/projectMascots";
+import {
+  getSession,
+  sanitizeSessionForPersist,
+} from "../../src/features/sessions/data/sessionStore";
 import type { UserQuestionReply } from "../../src/features/sessions/model/userQuestion";
 import {
   newSession,
@@ -27,12 +33,23 @@ saveTranscriptLayout("chat");
 /** What the app would send, and the links it would open. */
 const sent: { sessionId: string; text: string }[] = [];
 const opened: string[] = [];
+
+/**
+ * With ?persist=1 the sessions are saved after every change and read back on
+ * load, through the app's own save and restore, so a reload is a restart.
+ */
+const persist = new URLSearchParams(location.search).has("persist");
+const savedKey = (id: string) => `decision-cards-fixture:${id}`;
 Object.assign(window, {
   sent,
   opened,
   // GitHub and the opener answer as the desktop app's Rust side would.
   __TAURI_INTERNALS__: {
     invoke: async (cmd: string, args: Record<string, unknown>) => {
+      if (cmd === "session_get" || cmd === "mono_session_get") {
+        const saved = localStorage.getItem(savedKey(String(args.sessionId)));
+        return saved ? JSON.parse(saved) : null;
+      }
       if (cmd === "plugin:opener|open_url") {
         opened.push(String(args.url));
         return null;
@@ -94,6 +111,8 @@ const longQuestion = [
   "Third, the changelog lists the decision cards twice, once under features and once under fixes. Nothing is broken by it, but readers will notice, and fixing it means regenerating the notes by hand.",
   "Which one should I take first? Whatever you pick, I will finish it, run the whole check suite, and leave the other two for the next card instead of starting them without asking.",
 ].join("\n\n");
+
+const mascot = { mascot: PROJECT_MASCOTS[0].name, color: MONO_COLORS[0] };
 
 const initial = [
   session(
@@ -166,6 +185,32 @@ const initial = [
       ]),
     ],
   ),
+  // A Mono's chat, laid out as the floating chat lays it out.
+  session(
+    "floating",
+    "Pixi (floating chat)",
+    "Plan tomorrow's work.",
+    "Your morning is open. Two questions before I book it.",
+    [
+      card("first", "floating-user", [
+        {
+          header: "Tomorrow",
+          question: "What should I put first?",
+          options: [
+            { label: "Ship #12", recommended: true },
+            { label: "Triage the inbox" },
+          ],
+        },
+      ]),
+      card("when", "floating-user", [
+        {
+          header: "Time",
+          question: "When should I start?",
+          options: [{ label: "9:00", recommended: true }, { label: "11:00" }],
+        },
+      ]),
+    ],
+  ),
   session(
     "layout",
     "Layout (cards)",
@@ -226,10 +271,14 @@ const initial = [
 function Pane({
   session,
   onAnswer,
+  onType,
 }: {
   session: Session;
   onAnswer: (cardId: string, reply: UserQuestionReply) => void;
+  onType: (text: string) => void;
 }) {
+  const [draft, setDraft] = useState("");
+  const mono = session.id === "floating";
   return (
     <section
       data-pane={session.id}
@@ -242,6 +291,16 @@ function Pane({
           decisionCards={session.decisionCards}
           initialTurns={10}
           visible
+          {...(mono
+            ? {
+                agentName: "Pixi",
+                agentMascot: mascot,
+                bottomAligned: true,
+                inlineWork: true,
+                daySeparators: true,
+                hideTurnMetrics: true,
+              }
+            : {})}
         />
       </div>
       <div className="shrink-0 p-1.5">
@@ -250,29 +309,54 @@ function Pane({
           cwd={session.cwd}
           onAnswer={onAnswer}
         />
-        <div className="mx-1.5 rounded-lg border border-content/10 px-3 py-2.5 text-[12px] text-content/35">
-          Message the agent…
-        </div>
+        <form
+          className="mx-1.5 flex rounded-lg border border-content/10 text-[12px]"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!draft.trim()) return;
+            onType(draft.trim());
+            setDraft("");
+          }}
+        >
+          <input
+            data-composer
+            aria-label="Message the agent"
+            placeholder="Message the agent…"
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            className="min-w-0 flex-1 bg-transparent px-3 py-2.5 text-content outline-none placeholder:text-content/35"
+          />
+          <button type="submit" className="px-3 text-content/60">
+            Send
+          </button>
+        </form>
       </div>
     </section>
   );
 }
 
 /** Cards as storage keeps them: the first claim settles each, like the app's store. */
-const stored = new Map(
-  initial.flatMap((entry) =>
-    (entry.decisionCards ?? []).map((card) => [`${entry.id}:${card.id}`, card]),
-  ),
-);
+const stored = new Map<string, DecisionCard>();
 
-function Fixture() {
-  // ?only=<id> shows one pane, for cases that would crowd the others.
-  const only = new URLSearchParams(location.search).get("only");
-  const [sessions, setSessions] = useState(() =>
-    initial.filter((entry) => (only ? entry.id === only : entry.id !== "layout")),
+function save(session: Session) {
+  if (!persist) return;
+  localStorage.setItem(
+    savedKey(session.id),
+    JSON.stringify({
+      ...sanitizeSessionForPersist(session),
+      decisionCards: [...stored.entries()]
+        .filter(([key]) => key.startsWith(`${session.id}:`))
+        .map(([, card]) => card),
+    }),
   );
+}
+
+function Fixture({ start }: { start: Session[] }) {
+  const [sessions, setSessions] = useState(start);
+  const typed = useRef(0);
   const latest = useRef(sessions);
   latest.current = sessions;
+  useEffect(() => sessions.forEach(save), [sessions]);
   // The app's own answering, with storage and sending stubbed.
   const [answer] = useState(() =>
     decisionAnswerer({
@@ -289,7 +373,13 @@ function Fixture() {
                   ...entry,
                   blocks: [
                     ...entry.blocks,
-                    { id: `answer-${sent.length}`, role: "user", text },
+                    {
+                      id: `answer-${sent.length}`,
+                      role: "user",
+                      text,
+                      // The app marks the message that carries the answers.
+                      decisionAnswer: true,
+                    },
                   ],
                 }
               : entry,
@@ -302,6 +392,7 @@ function Fixture() {
         const card = stored.get(key);
         if (!card || card.outcome) return { card, claimed: false };
         stored.set(key, { ...card, outcome });
+        save(latest.current.find((entry) => entry.id === sessionId)!);
         return { card: stored.get(key), claimed: true };
       },
       release: async (sessionId, cardId, outcome) => {
@@ -326,10 +417,46 @@ function Fixture() {
           key={entry.id}
           session={entry}
           onAnswer={(cardId, reply) => void answer(entry.id, cardId, reply)}
+          onType={(text) =>
+            setSessions((prev) =>
+              prev.map((item) =>
+                item.id === entry.id
+                  ? {
+                      ...item,
+                      blocks: [
+                        ...item.blocks,
+                        { id: `typed-${++typed.current}`, role: "user", text },
+                      ],
+                    }
+                  : item,
+              ),
+            )
+          }
         />
       ))}
     </div>
   );
 }
 
-createRoot(document.getElementById("root")!).render(<Fixture />);
+async function start(): Promise<Session[]> {
+  // ?only=<id> shows one pane, for cases that would crowd the others.
+  const only = new URLSearchParams(location.search).get("only");
+  const shown = initial.filter((entry) =>
+    only ? entry.id === only : entry.id !== "layout" && entry.id !== "floating",
+  );
+  const restored = persist
+    ? await Promise.all(
+        shown.map(async (entry) => (await getSession(entry.id)) ?? entry),
+      )
+    : shown;
+  for (const entry of restored)
+    for (const card of entry.decisionCards ?? [])
+      stored.set(`${entry.id}:${card.id}`, card);
+  return restored;
+}
+
+void start().then((sessions) =>
+  createRoot(document.getElementById("root")!).render(
+    <Fixture start={sessions} />,
+  ),
+);

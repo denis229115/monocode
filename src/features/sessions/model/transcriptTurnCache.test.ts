@@ -216,4 +216,28 @@ describe("transcript turn cache", () => {
       if (settled) expect(prose).toEqual(["welcome", "cancelled"]);
     }
   });
+
+  it("leaves out the message that carried a decision card's answers", () => {
+    const cache = new TranscriptTurnCache();
+    const blocks: Block[] = [
+      { id: "u", role: "user", text: "Ship it" },
+      { id: "a", role: "assistant", text: "Which branch?" },
+      {
+        id: "answer",
+        role: "user",
+        text: "Which branch?\nmain",
+        decisionAnswer: true,
+      },
+      { id: "done", role: "assistant", text: "Shipped from main." },
+      { id: "typed", role: "user", text: "Which branch?\nmain" },
+    ];
+    const ids = (managed: boolean, inlineWork: boolean) =>
+      cache
+        .group(blocks, managed, inlineWork)
+        .flatMap((turn) => cache.turnItems(turn, true, { managed, inlineWork }))
+        .flatMap((item) => (item.type === "block" ? [item.block.id] : []));
+    for (const inlineWork of [false, true])
+      for (const managed of [false, true])
+        expect(ids(managed, inlineWork)).toEqual(["u", "a", "done", "typed"]);
+  });
 });

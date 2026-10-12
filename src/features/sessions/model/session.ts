@@ -278,6 +278,8 @@ export type QueuedMessage = {
   noteCard?: NoteComposerCard;
   handoffCard?: HandoffComposerCard;
   intent?: TurnIntent;
+  /** Answers to a decision card; the transcript will not repeat them. */
+  decisionAnswer?: boolean;
   /** An app notification that must wait for an idle Mono, never steer its work. */
   monoSessionCompletion?: MonoSessionCompletion;
   /** Delivery failed; the message remains available to retry or edit. */
@@ -367,6 +369,11 @@ export type Block = {
    * conversation rather than the user narrating their own agents.
    */
   internal?: boolean;
+  /**
+   * The user's answers to a decision card, sent as their next message. The
+   * agent gets it; the transcript skips it, since the answered card shows them.
+   */
+  decisionAnswer?: boolean;
   /** Hidden app prompt that starts a separate completion report in a Mono chat. */
   monoSessionCompletion?: MonoSessionCompletion;
   /** Accepted session launches, kept on the originating user turn. */
