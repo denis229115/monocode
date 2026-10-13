@@ -19,7 +19,7 @@ import type { Worktree } from "../../source-control/model/worktrees";
 import { handleAgentApp, notePreview, canAccessAgentAppProject, type AgentAppHost } from "./agentApp";
 
 vi.mock("../../../integrations/harness/core/availability", () => ({
-  isHarnessAvailable: (id: string) => id === "codex",
+  isHarnessAvailable: (id: string) => id === "codex" || id === "claude",
 }));
 
 const note: Note = {
@@ -1593,6 +1593,84 @@ describe("the account a started session runs on", () => {
       "account must be a non-empty string",
     );
     expect(host.start).not.toHaveBeenCalled();
+  });
+
+  it("refuses a name two accounts share, and takes either by id", async () => {
+    const { source, host } = fixture();
+    saveProviderAccount({ ...support, id: "account-support-2" });
+    await expect(start(source, host, { account: "support@" })).rejects.toThrow(
+      'Several codex accounts are named "support@"; pass the id of one: support@ (account-support), support@ (account-support-2)',
+    );
+    expect(host.start).not.toHaveBeenCalled();
+    for (const id of [support.id, "account-support-2"]) {
+      expect(await start(source, host, { account: id })).toMatchObject({
+        account: { id, name: "support@" },
+      });
+      expect(launched(host).providerAccountId).toBe(id);
+    }
+  });
+
+  it("refuses a name a profile shares with the default account", async () => {
+    const { source, host } = fixture();
+    saveProviderAccount({ ...support, label: "Default account" });
+    await expect(
+      start(source, host, { account: "Default account" }),
+    ).rejects.toThrow(
+      'pass the id of one: Default account (default), Default account (account-support)',
+    );
+    expect(await start(source, host, { account: "default" })).toMatchObject({
+      account: { id: "default", name: "Default account" },
+    });
+  });
+
+  it("starts a Claude session on the Mono's Claude account, not its Codex one", async () => {
+    const { source, host } = fixture();
+    saveProviderAccount({ id: "account-figma", provider: "claude", label: "figma@" });
+    host.isMono = () => true;
+    host.monoOf = () => ({
+      id: "mono",
+      projects: [source.cwd],
+      accounts: { codex: support.id, claude: "account-figma" },
+    });
+    expect(
+      await start(source, host, { harness: "claude", model: "claude:sonnet-5" }),
+    ).toMatchObject({
+      harness: "claude",
+      account: { id: "account-figma", name: "figma@" },
+    });
+    expect(launched(host).providerAccountId).toBe("account-figma");
+  });
+
+  it("refuses another provider's account", async () => {
+    const { source, host } = fixture();
+    saveProviderAccount({ id: "account-figma", provider: "claude", label: "figma@" });
+    for (const account of ["account-figma", "figma@"])
+      await expect(start(source, host, { account })).rejects.toThrow(
+        `Unknown codex account "${account}"`,
+      );
+    await expect(
+      start(source, host, {
+        harness: "claude",
+        model: "claude:sonnet-5",
+        account: support.id,
+      }),
+    ).rejects.toThrow(`Unknown claude account "${support.id}"`);
+    expect(host.start).not.toHaveBeenCalled();
+  });
+
+  it("runs on the default account when the Mono's account was removed", async () => {
+    const { source, host } = fixture();
+    selectProviderAccount("codex", source.cwd, support.id);
+    host.isMono = () => true;
+    host.monoOf = () => ({
+      id: "mono",
+      projects: [source.cwd],
+      accounts: { codex: "account-removed" },
+    });
+    expect(await start(source, host)).toMatchObject({
+      account: { id: "default", name: "Default account" },
+    });
+    expect(launched(host).providerAccountId).toBe("default");
   });
 
   it("lists each provider's accounts in models.list", async () => {

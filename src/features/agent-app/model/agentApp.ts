@@ -152,8 +152,11 @@ export type AgentAppHost = {
     id: string;
     projects: readonly string[];
     showStartedSessionsInSidebar?: boolean;
-    /** Its own provider accounts; the sessions it starts run on them. */
-    accounts?: Mono["accounts"];
+    /**
+     * Its own provider accounts; the sessions it starts run on them. Required
+     * so the type check fails if the app host stops passing them.
+     */
+    accounts: Mono["accounts"];
     /** Files the sessions it starts into a folder named after it. */
     folder?: { name: string; color: string };
   } | undefined;
@@ -540,12 +543,19 @@ function launchAccount(
   const accounts = supportsProviderAccounts(harness)
     ? providerAccounts(harness)
     : [];
-  const match =
-    accounts.find((account) => account.id === name) ??
-    accounts.find(
-      (account) => account.label.toLowerCase() === name.toLowerCase(),
+  const byId = accounts.find((account) => account.id === name);
+  if (byId) return byId.id;
+  const named = accounts.filter(
+    (account) => account.label.toLowerCase() === name.toLowerCase(),
+  );
+  if (named.length === 1) return named[0].id;
+  // Two logins can share a name; guessing could run the job on the wrong one.
+  if (named.length > 1)
+    throw new Error(
+      `Several ${harness} accounts are named "${name}"; pass the id of one: ${named
+        .map((account) => `${account.label} (${account.id})`)
+        .join(", ")}`,
     );
-  if (match) return match.id;
   throw new Error(
     accounts.length
       ? `Unknown ${harness} account "${name}"; use one of: ${accounts
