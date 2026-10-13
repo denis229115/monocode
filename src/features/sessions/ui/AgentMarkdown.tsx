@@ -293,7 +293,6 @@ function MarkdownLink({
       <LocalMedia
         path={file.path}
         label={label}
-        onOpen={onOpenFile ? () => onOpenFile(file.path) : undefined}
         fallback={link}
       />
     );
@@ -493,7 +492,7 @@ function MarkdownImage({
 }: MarkdownImageProps) {
   const allowRemoteMedia = useContext(RemoteMediaContext);
   const localMedia = useContext(LocalMediaContext);
-  const { cwd, onOpenFile } = useContext(FileOpenContext);
+  const { cwd } = useContext(FileOpenContext);
   const url = typeof src === "string" ? src.trim() : "";
   if (url.startsWith("data:image/")) {
     return <img {...props} src={url} alt={alt ?? ""} />;
@@ -510,7 +509,6 @@ function MarkdownImage({
       <LocalMedia
         path={file.path}
         label={alt ?? ""}
-        onOpen={onOpenFile ? () => onOpenFile(file.path) : undefined}
         fallback={null}
       />
     );
