@@ -18,6 +18,8 @@ type Props = {
   harnesses: HarnessId[];
   /** Offers launches since deleted, which only a Mono's sessions keep. */
   unavailableOption?: boolean;
+  /** Offers hiding archived sessions, which a Mono's sessions list by default. */
+  hideArchivedOption?: boolean;
   filters: SessionSidebarFilters;
   onChange: (filters: SessionSidebarFilters) => void;
   onClose: () => void;
@@ -35,6 +37,7 @@ export function SessionFiltersMenu({
   y,
   harnesses,
   unavailableOption = false,
+  hideArchivedOption = false,
   filters,
   onChange,
   onClose,
@@ -64,6 +67,11 @@ export function SessionFiltersMenu({
     onClose();
   };
 
+  const toggleHideArchived = () => {
+    onChange({ ...filters, hideArchived: !filters.hideArchived });
+    onClose();
+  };
+
   const toggleUnavailable = () => {
     onChange({ ...filters, showUnavailable: !filters.showUnavailable });
     onClose();
@@ -86,6 +94,13 @@ export function SessionFiltersMenu({
         checked={filters.showArchived}
         onClick={toggleArchived}
       />
+      {hideArchivedOption ? (
+        <FilterItem
+          label="Hide archived"
+          checked={!!filters.hideArchived}
+          onClick={toggleHideArchived}
+        />
+      ) : null}
       {unavailableOption ? (
         <FilterItem
           label="Unavailable"

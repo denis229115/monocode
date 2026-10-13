@@ -127,6 +127,8 @@ export function MonoOverview({
   const [filters, setFilters] = useState<SessionSidebarFilters>(
     DEFAULT_SESSION_SIDEBAR_FILTERS,
   );
+  // Archived sessions the list leaves out are not counted on the tab.
+  const [archivedHidden, setArchivedHidden] = useState(0);
   // Once opened, the changes stay mounted so a commit draft survives a look
   // at another tab.
   const [changesVisited, setChangesVisited] = useState(tab === "changes");
@@ -208,7 +210,7 @@ export function MonoOverview({
 
   const habitsFull = !habits || habits.length >= HABITS_MAX;
   const counts: Record<MonoOverviewTab, number | undefined> = {
-    sessions: launches.length,
+    sessions: Math.max(0, launches.length - archivedHidden),
     habits: habits?.length,
     documents: documents.length,
     changes: changes?.totals?.files,
@@ -299,6 +301,7 @@ export function MonoOverview({
                   history={history}
                   query={query}
                   filters={filters}
+                  onArchivedHidden={setArchivedHidden}
                   onOpenSession={onOpenSession}
                 />
               </div>
@@ -404,6 +407,7 @@ function SessionSearchBar({
           y={menu.y}
           harnesses={harnesses}
           unavailableOption
+          hideArchivedOption
           filters={filters}
           onChange={onFiltersChange}
           onClose={() => setMenu(null)}

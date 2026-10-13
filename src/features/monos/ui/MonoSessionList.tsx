@@ -13,12 +13,12 @@ import {
   type SessionSummary,
 } from "../../sessions/data/sessionStore";
 import {
-  filterSessionsByArchive,
   filterSessionsByQuery,
   summaryFromSession,
 } from "../../sessions/data/sessionHistory";
 import {
   DEFAULT_SESSION_SIDEBAR_FILTERS,
+  filterMonoSessionsByArchive,
   filterSessionsByHarness,
   hasActiveSessionFilters,
   filterSessionsByStatus,
@@ -58,6 +58,7 @@ export function MonoSessionList({
   history = [],
   query = "",
   filters = DEFAULT_SESSION_SIDEBAR_FILTERS,
+  onArchivedHidden,
   onOpenSession,
 }: {
   agent: MonoLook;
@@ -67,6 +68,8 @@ export function MonoSessionList({
   /** Narrows the cards as the sidebar's session search does. */
   query?: string;
   filters?: SessionSidebarFilters;
+  /** How many archived launches the filters leave out, for the tab's count. */
+  onArchivedHidden?: (count: number) => void;
   onOpenSession: (sessionId: string) => void | Promise<void>;
 }) {
   const launchesKey = JSON.stringify(
@@ -207,12 +210,9 @@ export function MonoSessionList({
   const filtered = filterSessionsByStatus(
     filterSessionsByTime(
       filterSessionsByHarness(
-        // Archived launches stay with the rest; the filter narrows to them.
-        // Deleted ones are hidden unless the filter asks for just them.
-        (filters.showArchived
-          ? filterSessionsByArchive(rows, true)
-          : rows
-        ).filter(
+        // Archived launches are hidden unless the filters keep them or narrow
+        // to them. Deleted ones are hidden unless the filter asks for just them.
+        filterMonoSessionsByArchive(rows, filters).filter(
           (row) => unavailableIds.has(row.id) === !!filters.showUnavailable,
         ),
         filters.hiddenHarnesses,
@@ -225,6 +225,13 @@ export function MonoSessionList({
     approvalIds,
     doneIds,
   );
+  const archivedHidden =
+    filters.hideArchived && !filters.showArchived
+      ? rows.filter((row) => row.archived).length
+      : 0;
+  useEffect(() => {
+    onArchivedHidden?.(archivedHidden);
+  }, [archivedHidden]);
   // The project a session runs in is on its card, so it is searched too.
   const needle = query.trim();
   const matched = new Set(

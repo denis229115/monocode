@@ -118,6 +118,24 @@ it("names only the open tab, with its count, and switches tabs", async () => {
   expect(onTabChange).toHaveBeenCalledWith("documents");
 });
 
+it("leaves hidden archived sessions out of the Sessions count", async () => {
+  const saved = (id: string, archived?: boolean) => ({
+    id,
+    cwd: "/p",
+    harness: "codex" as const,
+    model: "codex:gpt-5.4",
+    runtimeMode: "auto" as const,
+    title: id,
+    archived,
+    createdAt: 1,
+    updatedAt: 1,
+  });
+  await render("sessions", vi.fn(), {
+    history: [saved("a"), saved("b", true)],
+  });
+  expect(tabs()[0].textContent).toBe("Sessions1");
+});
+
 const changes = (totals: unknown) => ({
   changes: {
     sessionId: "mono",
