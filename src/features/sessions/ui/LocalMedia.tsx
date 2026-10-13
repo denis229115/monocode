@@ -6,6 +6,7 @@ import {
   sniffImageMime,
   videoMimeForPath,
 } from "../../files/model/filePreview";
+import { ImageLightbox } from "../../../shared/ui/ImageLightbox";
 
 /** Whether a path names a file `LocalMedia` can show. */
 export function isLocalMediaPath(path: string): boolean {
@@ -27,18 +28,17 @@ type Media = { url: string; kind: "image" | "video" };
 export function LocalMedia({
   path,
   label,
-  onOpen,
   fallback,
 }: {
   path: string;
   label: string;
-  onOpen?: () => void;
   fallback: ReactNode;
 }) {
   const boxRef = useRef<HTMLSpanElement>(null);
   const [near, setNear] = useState(false);
   const [media, setMedia] = useState<Media | null>(null);
   const [failed, setFailed] = useState(false);
+  const [open, setOpen] = useState(false);
 
   useEffect(() => {
     const box = boxRef.current;
@@ -115,13 +115,20 @@ export function LocalMedia({
         <img
           src={media.url}
           alt={label}
-          title={onOpen ? "Open image" : undefined}
+          title="Open image"
           draggable={false}
-          onClick={onOpen}
+          onClick={() => setOpen(true)}
           onError={() => setFailed(true)}
-          className={`block size-full object-contain ${onOpen ? "cursor-zoom-in" : ""}`}
+          className="block size-full cursor-zoom-in object-contain"
         />
       )}
+      {open && media?.kind === "image" ? (
+        <ImageLightbox
+          src={media.url}
+          alt={label}
+          onClose={() => setOpen(false)}
+        />
+      ) : null}
     </span>
   );
 }
