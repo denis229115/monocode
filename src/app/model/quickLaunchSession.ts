@@ -80,6 +80,8 @@ export async function acceptQuickLaunch(
     );
   session.id = deliveryId;
   if (!existing && launch.sidebarHidden) session.sidebarHidden = true;
+  if (launch.providerAccountId)
+    session.providerAccountId = launch.providerAccountId;
   if (launch.modelSettings) {
     session.modelSettings = mergeModelSettings(
       resolveModel(session.harness, session.model),

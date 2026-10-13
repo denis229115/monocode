@@ -481,3 +481,17 @@ it("does not submit an accepted prompt again after a lost ACK", async () => {
   expect(workspace.submit).toHaveBeenCalledOnce();
   expect(queue).toHaveLength(0);
 });
+
+it("starts the session on the launch's provider account, or leaves it unset", async () => {
+  const { state, workspace, request } = setup();
+  await acceptQuickLaunch(
+    { ...request, providerAccountId: "account-support" },
+    "on-account",
+    workspace,
+  );
+  await acceptQuickLaunch(request, "on-folder-account", workspace);
+  const byId = (id: string) =>
+    state.sessions.find((session) => session.id === id);
+  expect(byId("on-account")?.providerAccountId).toBe("account-support");
+  expect(byId("on-folder-account")?.providerAccountId).toBeUndefined();
+});

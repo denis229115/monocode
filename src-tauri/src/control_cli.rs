@@ -127,7 +127,8 @@ sessions.*, worktrees.* and folders.* actions to choose which one. It may be
 left out when the Mono has a single project.
 
 Actions:
-  models.list    {}  Available providers, models, settings and permission modes.
+  models.list    {}  Available providers, models, settings, accounts and
+                  permission modes.
   sessions.list  {}  Project sessions with IDs, busy status, hasDraft and archived.
   sessions.read  {"sessionId":"...","before":"<turnId>","limit":3,"maxChars":1200}
                   Read up to 3 recent user/assistant exchanges. Tools and
@@ -144,7 +145,7 @@ Actions:
                   drafts are preserved; send or remove one in MonoCode first.
                   Reuse --request-id on retries.
   sessions.start {"prompt":"...","harness":"codex","model":"codex:...",
-                  "effort":"high","reveal":false,
+                  "account":"<id or name>","effort":"high","reveal":false,
                   "workspaceMode":"current","worktreeCwd":"<path>","draft":false,
                   "placement":"right",
                   "besideSessionId":"<visible session ID>"}
@@ -177,6 +178,11 @@ Actions:
                   runtimeMode to inherit this
                   session's permission mode; set it to override. Run
                   models.list for allowed IDs. cwd is your project; no attachments.
+                  A Mono's sessions run on its own provider account; omit
+                  account to use it (or the app's account when it has none).
+                  Set account to an id or name from models.list to choose
+                  another for this session. The result names its account.
+                  Follow-ups through sessions.send keep that account.
   sessions.stop {"sessionId":"..."}
                   Stop a session's current turn and pause its queued messages.
                   The conversation and checkout are kept. Idle sessions are

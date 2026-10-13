@@ -11265,6 +11265,7 @@ function Workspace({
                   projects: mono.projects,
                   showStartedSessionsInSidebar:
                     mono.showStartedSessionsInSidebar,
+                  accounts: mono.accounts,
                   ...(mono.useSidebarFolders
                     ? {
                         folder: {
