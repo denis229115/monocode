@@ -18,6 +18,10 @@ type Props = {
   harnesses: HarnessId[];
   /** Offers launches since deleted, which only a Mono's sessions keep. */
   unavailableOption?: boolean;
+  /** Offers hiding archived sessions, which a Mono's sessions list by default. */
+  hideArchivedOption?: boolean;
+  /** What "Clear filters" returns to; a Mono's hides archived sessions. */
+  defaultFilters?: SessionSidebarFilters;
   filters: SessionSidebarFilters;
   onChange: (filters: SessionSidebarFilters) => void;
   onClose: () => void;
@@ -35,6 +39,8 @@ export function SessionFiltersMenu({
   y,
   harnesses,
   unavailableOption = false,
+  hideArchivedOption = false,
+  defaultFilters = DEFAULT_SESSION_SIDEBAR_FILTERS,
   filters,
   onChange,
   onClose,
@@ -64,6 +70,11 @@ export function SessionFiltersMenu({
     onClose();
   };
 
+  const toggleHideArchived = () => {
+    onChange({ ...filters, hideArchived: !filters.hideArchived });
+    onClose();
+  };
+
   const toggleUnavailable = () => {
     onChange({ ...filters, showUnavailable: !filters.showUnavailable });
     onClose();
@@ -86,6 +97,13 @@ export function SessionFiltersMenu({
         checked={filters.showArchived}
         onClick={toggleArchived}
       />
+      {hideArchivedOption ? (
+        <FilterItem
+          label="Hide archived"
+          checked={!!filters.hideArchived}
+          onClick={toggleHideArchived}
+        />
+      ) : null}
       {unavailableOption ? (
         <FilterItem
           label="Unavailable"
@@ -145,7 +163,7 @@ export function SessionFiltersMenu({
             type="button"
             role="menuitem"
             onMouseDown={(event) => event.preventDefault()}
-            onClick={() => onChange(DEFAULT_SESSION_SIDEBAR_FILTERS)}
+            onClick={() => onChange(defaultFilters)}
             className="flex h-7 w-full items-center rounded-lg px-2 text-left text-[13px] leading-none text-content/70 hover:bg-content/5 hover:text-content"
           >
             Clear filters

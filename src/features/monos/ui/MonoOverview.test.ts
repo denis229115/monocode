@@ -118,6 +118,61 @@ it("names only the open tab, with its count, and switches tabs", async () => {
   expect(onTabChange).toHaveBeenCalledWith("documents");
 });
 
+it("leaves hidden archived sessions out of the Sessions count", async () => {
+  const saved = (id: string, archived?: boolean) => ({
+    id,
+    cwd: "/p",
+    harness: "codex" as const,
+    model: "codex:gpt-5.4",
+    runtimeMode: "auto" as const,
+    title: id,
+    archived,
+    createdAt: 1,
+    updatedAt: 1,
+  });
+  await render("sessions", vi.fn(), {
+    history: [saved("a"), saved("b", true)],
+  });
+  expect(tabs()[0].textContent).toBe("Sessions1");
+});
+
+it("starts without archived sessions, shows them when hiding is turned off, and clears back", async () => {
+  const saved = (id: string, archived?: boolean) => ({
+    id,
+    cwd: "/p",
+    harness: "codex" as const,
+    model: "codex:gpt-5.4",
+    runtimeMode: "auto" as const,
+    title: id,
+    archived,
+    createdAt: 1,
+    updatedAt: 1,
+  });
+  await render("sessions", vi.fn(), {
+    history: [saved("a"), saved("b", true)],
+  });
+  const cards = () => container.querySelectorAll("[data-session-card]").length;
+  const item = (label: string) =>
+    [...document.querySelectorAll<HTMLElement>('[role="menuitem"],[role="menuitemcheckbox"]')].find(
+      (entry) => entry.textContent === label,
+    )!;
+  const openMenu = () =>
+    act(async () =>
+      container
+        .querySelector<HTMLElement>('button[aria-label="Filter sessions"]')!
+        .click(),
+    );
+  expect(cards()).toBe(1);
+  await openMenu();
+  expect(item("Hide archived").getAttribute("aria-checked")).toBe("true");
+  await act(async () => item("Hide archived").click());
+  expect(cards()).toBe(2);
+  await openMenu();
+  expect(item("Hide archived").getAttribute("aria-checked")).toBe("false");
+  await act(async () => item("Clear filters").click());
+  expect(cards()).toBe(1);
+});
+
 const changes = (totals: unknown) => ({
   changes: {
     sessionId: "mono",

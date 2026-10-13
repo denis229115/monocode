@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_SESSION_SIDEBAR_FILTERS,
+  filterMonoSessionsByArchive,
   filterSessionsByHarness,
   filterSessionsByStatus,
   filterSessionsByTime,
@@ -102,6 +103,38 @@ describe("hasActiveSessionFilters", () => {
         time: "7d",
       }),
     ).toBe(true);
+  });
+
+  it("is true once a Mono's archived sessions are shown again", () => {
+    expect(
+      hasActiveSessionFilters({
+        ...DEFAULT_SESSION_SIDEBAR_FILTERS,
+        hideArchived: false,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("filterMonoSessionsByArchive", () => {
+  const rows = [summary("a1"), summary("a2", { archived: true })];
+  const ids = (filters: Partial<typeof DEFAULT_SESSION_SIDEBAR_FILTERS>) =>
+    filterMonoSessionsByArchive(rows, {
+      ...DEFAULT_SESSION_SIDEBAR_FILTERS,
+      hideArchived: true,
+      ...filters,
+    }).map((row) => row.id);
+
+  it("hides archived sessions while hiding is on", () => {
+    expect(ids({})).toEqual(["a1"]);
+  });
+
+  it("keeps them when hiding is off", () => {
+    expect(ids({ hideArchived: false })).toEqual(["a1", "a2"]);
+  });
+
+  it("narrows to archived ones, which wins over hiding them", () => {
+    expect(ids({ showArchived: true })).toEqual(["a2"]);
+    expect(ids({ showArchived: true, hideArchived: false })).toEqual(["a2"]);
   });
 });
 

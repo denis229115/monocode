@@ -14,6 +14,8 @@ export type SessionSidebarFilters = {
   showArchived: boolean;
   /** Narrows a Mono's sessions to launches since deleted. */
   showUnavailable?: boolean;
+  /** Drops archived sessions from a Mono's sessions; "Archived" wins over it. */
+  hideArchived?: boolean;
   hiddenHarnesses: HarnessId[];
   time: SessionTimeFilter;
   status: SessionStatusFilter;
@@ -82,12 +84,23 @@ export function hasActiveSessionFilters(
   return (
     filters.showArchived ||
     !!filters.showUnavailable ||
+    filters.hideArchived === false ||
     filters.hiddenHarnesses.length > 0 ||
     filters.time !== "all" ||
     filters.status.working ||
     filters.status.needsApproval ||
     filters.status.done
   );
+}
+
+/** A Mono's sessions: "Archived" narrows to archived ones, else they are hidden. */
+export function filterMonoSessionsByArchive(
+  rows: SessionSummary[],
+  filters: SessionSidebarFilters,
+): SessionSummary[] {
+  if (filters.showArchived) return rows.filter((row) => row.archived);
+  if (filters.hideArchived) return rows.filter((row) => !row.archived);
+  return rows;
 }
 
 export function filterSessionsByHarness(

@@ -12,6 +12,7 @@ import {
   type MonoSpawnedSession,
   type Session,
 } from "../../sessions/model/session";
+import { DEFAULT_SESSION_SIDEBAR_FILTERS } from "../../sessions/model/sessionFilters";
 import { MonoSessionList } from "./MonoSessionList";
 
 vi.mock("../../sessions/data/sessionStore", () => ({
@@ -118,6 +119,7 @@ it("loads closed sessions across projects", async () => {
   await render(
     [],
     [launch, { ...launch, sessionId: "app-second", cwd: "/other" }],
+    { filters: { ...DEFAULT_SESSION_SIDEBAR_FILTERS, hideArchived: false } },
   );
   expect(listSessionsByProject).toHaveBeenCalledWith("/repo");
   expect(listSessionsByProject).toHaveBeenCalledWith("/other");
@@ -293,6 +295,85 @@ it("narrows its cards by search, project and the sidebar's filters", async () =>
   await show({ query: "nothing like it" });
   expect(cards()).toHaveLength(0);
   expect(container.textContent).toContain("No sessions match this search.");
+});
+
+it("hides archived sessions while hiding is on and reports how many it left out", async () => {
+  vi.mocked(listSessionsByProject).mockImplementation(async (cwd) => [
+    {
+      id: cwd === "/repo" ? launch.sessionId : "app-second",
+      cwd,
+      harness: "codex",
+      model: "gpt-6",
+      runtimeMode: "default",
+      title: cwd === "/repo" ? "Saved review" : "Fix login",
+      archived: cwd === "/repo",
+      createdAt: 1,
+      updatedAt: 2,
+    } as SessionSummary,
+  ]);
+  const launches = [
+    launch,
+    { ...launch, sessionId: "app-second", cwd: "/other" },
+  ];
+  const onArchivedHidden = vi.fn();
+  const show = (filters?: Record<string, unknown>) =>
+    act(async () =>
+      root.render(
+        createElement(MonoSessionList, {
+          agent,
+          launches,
+          sessions: [],
+          onOpenSession,
+          onArchivedHidden,
+          ...(filters && {
+            filters: {
+              ...DEFAULT_SESSION_SIDEBAR_FILTERS,
+              hideArchived: true,
+              ...filters,
+            },
+          }),
+        }),
+      ),
+    );
+  const cards = () =>
+    [...container.querySelectorAll("[data-session-card]")].map(
+      (card) => card.textContent ?? "",
+    );
+
+  await show({});
+  expect(cards()).toHaveLength(1);
+  expect(cards()[0]).toContain("Fix login");
+  expect(onArchivedHidden).toHaveBeenLastCalledWith(1);
+  await show({ hideArchived: false });
+  expect(cards()).toHaveLength(2);
+  expect(onArchivedHidden).toHaveBeenLastCalledWith(0);
+  // "Archived" narrows to archived only, and wins over hiding them.
+  await show({ showArchived: true });
+  expect(cards()).toHaveLength(1);
+  expect(cards()[0]).toContain("Saved review");
+  expect(onArchivedHidden).toHaveBeenLastCalledWith(0);
+});
+
+it("says its archived sessions are hidden, not deleted, when all of them are", async () => {
+  vi.mocked(listSessionsByProject).mockResolvedValue([
+    {
+      id: launch.sessionId,
+      cwd: "/repo",
+      harness: "codex",
+      model: "gpt-6",
+      runtimeMode: "default",
+      title: "Saved review",
+      archived: true,
+      createdAt: 1,
+      updatedAt: 2,
+    } as SessionSummary,
+  ]);
+  await render([], [launch], {
+    filters: { ...DEFAULT_SESSION_SIDEBAR_FILTERS, hideArchived: true },
+  });
+  expect(container.querySelector("[data-session-card]")).toBeNull();
+  expect(container.textContent).toContain("No sessions match these filters.");
+  expect(container.textContent).not.toContain("deleted");
 });
 
 it("mounts a page of cards at a time and the next as the list nears its end", async () => {
