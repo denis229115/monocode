@@ -1,6 +1,14 @@
 import { isHarnessAvailable } from "../../../integrations/harness/core/availability";
 import { looksLikeProject } from "../../projects/model/recents";
 import {
+  providerAccountLabel,
+  providerAccounts,
+  selectedProviderAccountId,
+  supportsProviderAccounts,
+} from "../../providers/model/providerAccounts";
+import { monoAccountChoice } from "../../monos/model/monoAccount";
+import type { Mono } from "../../monos/model/mono";
+import {
   mergeModelSettings,
   modelEffortSetting,
   modelsFor,
@@ -144,6 +152,11 @@ export type AgentAppHost = {
     id: string;
     projects: readonly string[];
     showStartedSessionsInSidebar?: boolean;
+    /**
+     * Its own provider accounts; the sessions it starts run on them. Required
+     * so the type check fails if the app host stops passing them.
+     */
+    accounts: Mono["accounts"];
     /** Files the sessions it starts into a folder named after it. */
     folder?: { name: string; color: string };
   } | undefined;
@@ -197,6 +210,7 @@ const FIELDS = new Map<string, readonly string[]>([
       "prompt",
       "draft",
       "harness",
+      "account",
       "model",
       "modelSettings",
       "effort",
@@ -423,6 +437,11 @@ function startLaunch(
   const chosenHarness = harness as HarnessId;
   if (!isHarnessAvailable(chosenHarness))
     throw new Error(`${chosenHarness} is not available in MonoCode`);
+  const providerAccountId = launchAccount(
+    chosenHarness,
+    input.account,
+    host.monoOf?.(source.id),
+  );
   const requestedModel = optionalString(input.model, "model");
   const model = requestedModel
     ? modelsFor(chosenHarness).find((entry) => entry.id === requestedModel)
@@ -489,6 +508,7 @@ function startLaunch(
       : {}),
     ...(draft ? { draft: true } : {}),
     harness: chosenHarness,
+    ...(providerAccountId ? { providerAccountId } : {}),
     model: model.id,
     modelSettings: mergeModelSettings(model, {
       ...(chosenHarness === source.harness && model.id === source.model
@@ -504,6 +524,55 @@ function startLaunch(
       ? { worktreeCwd: currentWorktree }
       : {}),
     ...(worktreeBase ? { worktreeBase } : {}),
+  };
+}
+
+/**
+ * The account a started session runs on: the one named, by id or the name the
+ * model selector shows, else the calling Mono's own. Absent keeps the folder's
+ * selection, as before.
+ */
+function launchAccount(
+  harness: HarnessId,
+  requested: unknown,
+  mono: Pick<Mono, "accounts"> | undefined,
+): string | undefined {
+  if (requested === undefined)
+    return mono ? monoAccountChoice(mono, harness).accountId : undefined;
+  const name = requiredString(requested, "account", 200).trim();
+  const accounts = supportsProviderAccounts(harness)
+    ? providerAccounts(harness)
+    : [];
+  const byId = accounts.find((account) => account.id === name);
+  if (byId) return byId.id;
+  const named = accounts.filter(
+    (account) => account.label.toLowerCase() === name.toLowerCase(),
+  );
+  if (named.length === 1) return named[0].id;
+  // Two logins can share a name; guessing could run the job on the wrong one.
+  if (named.length > 1)
+    throw new Error(
+      `Several ${harness} accounts are named "${name}"; pass the id of one: ${named
+        .map((account) => `${account.label} (${account.id})`)
+        .join(", ")}`,
+    );
+  throw new Error(
+    accounts.length
+      ? `Unknown ${harness} account "${name}"; use one of: ${accounts
+          .map((account) => `${account.label} (${account.id})`)
+          .join(", ")}`
+      : `${harness} has no accounts to choose from`,
+  );
+}
+
+/** The account a started session runs on, so the caller can check it. */
+function launchAccountAnswer(launch: QuickLaunch) {
+  if (!supportsProviderAccounts(launch.harness)) return {};
+  const id =
+    launch.providerAccountId ??
+    selectedProviderAccountId(launch.harness, launch.cwd);
+  return {
+    account: { id, name: providerAccountLabel(launch.harness, id) },
   };
 }
 
@@ -1021,6 +1090,14 @@ export async function handleAgentApp(
             name: model.name,
             settings: model.settings ?? [],
           })),
+          ...(supportsProviderAccounts(harness)
+            ? {
+                accounts: providerAccounts(harness).map(({ id, label }) => ({
+                  id,
+                  name: label,
+                })),
+              }
+            : {}),
         })),
       };
     case "sessions.list": {
@@ -1152,6 +1229,7 @@ export async function handleAgentApp(
         id,
         cwd: launch.cwd,
         harness: launch.harness,
+        ...launchAccountAnswer(launch),
         model: launch.model,
         submitted: !launch.draft,
         draft: !!launch.draft,

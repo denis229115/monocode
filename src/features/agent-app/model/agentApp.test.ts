@@ -9,13 +9,17 @@ import {
   loadSessionFolders,
   saveSessionFolders,
 } from "../../sessions/model/sessionFolders";
+import {
+  saveProviderAccount,
+  selectProviderAccount,
+} from "../../providers/model/providerAccounts";
 import type { Note } from "../../notes";
 import type { Artifact } from "../../artifacts/artifacts";
 import type { Worktree } from "../../source-control/model/worktrees";
 import { handleAgentApp, notePreview, canAccessAgentAppProject, type AgentAppHost } from "./agentApp";
 
 vi.mock("../../../integrations/harness/core/availability", () => ({
-  isHarnessAvailable: (id: string) => id === "codex",
+  isHarnessAvailable: (id: string) => id === "codex" || id === "claude",
 }));
 
 const note: Note = {
@@ -1503,5 +1507,183 @@ describe("agent app commands", () => {
         host,
       ),
     ).rejects.toThrow("body is required");
+  });
+});
+
+describe("the account a started session runs on", () => {
+  const support = {
+    id: "account-support",
+    provider: "codex" as const,
+    label: "support@",
+  };
+  const launched = (host: AgentAppHost) =>
+    vi.mocked(host.start).mock.calls.at(-1)![0];
+  const start = (
+    source: ReturnType<typeof fixture>["source"],
+    host: AgentAppHost,
+    input: Record<string, unknown> = {},
+  ) =>
+    handleAgentApp(
+      source,
+      "account-launch",
+      "sessions.start",
+      { prompt: "Build the Figma screens", notifyOnComplete: false, ...input },
+      host,
+    );
+
+  beforeEach(() => saveProviderAccount(support));
+
+  it("keeps the folder's account when the caller has no account of its own", async () => {
+    const { source, host } = fixture();
+    expect(await start(source, host)).toMatchObject({
+      account: { id: "default", name: "Default account" },
+    });
+    expect(launched(host).providerAccountId).toBeUndefined();
+
+    host.isMono = () => true;
+    host.monoOf = () => ({ id: "mono", projects: [source.cwd] });
+    selectProviderAccount("codex", source.cwd, support.id);
+    expect(await start(source, host)).toMatchObject({
+      account: { id: support.id, name: "support@" },
+    });
+    expect(launched(host).providerAccountId).toBeUndefined();
+  });
+
+  it("runs a Mono's session, and its habit runs' sessions, on the Mono's account", async () => {
+    const { source, host } = fixture();
+    host.monoOf = () => ({
+      id: "mono",
+      projects: [source.cwd],
+      accounts: { codex: support.id },
+    });
+    for (const habitRun of [false, true]) {
+      host.isMono = () => !habitRun;
+      host.isHabitRun = () => habitRun;
+      expect(await start(source, host)).toMatchObject({
+        account: { id: support.id, name: "support@" },
+      });
+      expect(launched(host).providerAccountId).toBe(support.id);
+    }
+  });
+
+  it.each([support.id, "SUPPORT@", "default"])(
+    "takes a named account over the Mono's: %s",
+    async (account) => {
+      const { source, host } = fixture();
+      host.isMono = () => true;
+      host.monoOf = () => ({
+        id: "mono",
+        projects: [source.cwd],
+        accounts: { codex: account === "default" ? support.id : "default" },
+      });
+      const expected = account === "default" ? "default" : support.id;
+      expect(await start(source, host, { account })).toMatchObject({
+        account: { id: expected },
+      });
+      expect(launched(host).providerAccountId).toBe(expected);
+    },
+  );
+
+  it("refuses an unknown account and lists the ones to choose", async () => {
+    const { source, host } = fixture();
+    await expect(start(source, host, { account: "figma@" })).rejects.toThrow(
+      'Unknown codex account "figma@"; use one of: Default account (default), support@ (account-support)',
+    );
+    await expect(start(source, host, { account: 7 })).rejects.toThrow(
+      "account must be a non-empty string",
+    );
+    expect(host.start).not.toHaveBeenCalled();
+  });
+
+  it("refuses a name two accounts share, and takes either by id", async () => {
+    const { source, host } = fixture();
+    saveProviderAccount({ ...support, id: "account-support-2" });
+    await expect(start(source, host, { account: "support@" })).rejects.toThrow(
+      'Several codex accounts are named "support@"; pass the id of one: support@ (account-support), support@ (account-support-2)',
+    );
+    expect(host.start).not.toHaveBeenCalled();
+    for (const id of [support.id, "account-support-2"]) {
+      expect(await start(source, host, { account: id })).toMatchObject({
+        account: { id, name: "support@" },
+      });
+      expect(launched(host).providerAccountId).toBe(id);
+    }
+  });
+
+  it("refuses a name a profile shares with the default account", async () => {
+    const { source, host } = fixture();
+    saveProviderAccount({ ...support, label: "Default account" });
+    await expect(
+      start(source, host, { account: "Default account" }),
+    ).rejects.toThrow(
+      'pass the id of one: Default account (default), Default account (account-support)',
+    );
+    expect(await start(source, host, { account: "default" })).toMatchObject({
+      account: { id: "default", name: "Default account" },
+    });
+  });
+
+  it("starts a Claude session on the Mono's Claude account, not its Codex one", async () => {
+    const { source, host } = fixture();
+    saveProviderAccount({ id: "account-figma", provider: "claude", label: "figma@" });
+    host.isMono = () => true;
+    host.monoOf = () => ({
+      id: "mono",
+      projects: [source.cwd],
+      accounts: { codex: support.id, claude: "account-figma" },
+    });
+    expect(
+      await start(source, host, { harness: "claude", model: "claude:sonnet-5" }),
+    ).toMatchObject({
+      harness: "claude",
+      account: { id: "account-figma", name: "figma@" },
+    });
+    expect(launched(host).providerAccountId).toBe("account-figma");
+  });
+
+  it("refuses another provider's account", async () => {
+    const { source, host } = fixture();
+    saveProviderAccount({ id: "account-figma", provider: "claude", label: "figma@" });
+    for (const account of ["account-figma", "figma@"])
+      await expect(start(source, host, { account })).rejects.toThrow(
+        `Unknown codex account "${account}"`,
+      );
+    await expect(
+      start(source, host, {
+        harness: "claude",
+        model: "claude:sonnet-5",
+        account: support.id,
+      }),
+    ).rejects.toThrow(`Unknown claude account "${support.id}"`);
+    expect(host.start).not.toHaveBeenCalled();
+  });
+
+  it("runs on the default account when the Mono's account was removed", async () => {
+    const { source, host } = fixture();
+    selectProviderAccount("codex", source.cwd, support.id);
+    host.isMono = () => true;
+    host.monoOf = () => ({
+      id: "mono",
+      projects: [source.cwd],
+      accounts: { codex: "account-removed" },
+    });
+    expect(await start(source, host)).toMatchObject({
+      account: { id: "default", name: "Default account" },
+    });
+    expect(launched(host).providerAccountId).toBe("default");
+  });
+
+  it("lists each provider's accounts in models.list", async () => {
+    const { source, host } = fixture();
+    const result = (await handleAgentApp(source, "models", "models.list", {}, host)) as {
+      harnesses: { id: string; accounts?: unknown }[];
+    };
+    expect(result.harnesses.find((entry) => entry.id === "codex")?.accounts).toEqual([
+      { id: "default", name: "Default account" },
+      { id: support.id, name: "support@" },
+    ]);
+    expect(result.harnesses.find((entry) => entry.id === "claude")?.accounts).toEqual([
+      { id: "default", name: "Default account" },
+    ]);
   });
 });

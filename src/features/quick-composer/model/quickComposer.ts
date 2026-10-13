@@ -61,6 +61,8 @@ export type QuickLaunch = {
   intent?: "plan" | "orchestrate";
   cwd: string;
   harness: HarnessId;
+  /** Provider account to run on; missing means the folder's selection. */
+  providerAccountId?: string;
   /** Missing means the harness default, resolved by the workspace. */
   model?: string;
   modelSettings?: Record<string, string>;
