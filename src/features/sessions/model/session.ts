@@ -753,12 +753,19 @@ export function sessionBlockedOnInput(session: Session): boolean {
   );
 }
 
+/** Decision cards still waiting on the user; none once the worktree is gone. */
+export function sessionWaitingDecisionCards(
+  session: Session,
+): import("./decisionCard").DecisionCard[] {
+  if (session.worktreeRemoved) return [];
+  return (session.decisionCards ?? []).filter((card) => !card.outcome);
+}
+
 /** Waiting on the user: blocked, or holding a decision card not yet settled. */
 export function sessionNeedsInput(session: Session): boolean {
   return (
     sessionBlockedOnInput(session) ||
-    (!session.worktreeRemoved &&
-      !!session.decisionCards?.some((card) => !card.outcome))
+    sessionWaitingDecisionCards(session).length > 0
   );
 }
 
