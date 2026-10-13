@@ -278,7 +278,7 @@ export function MonoSessionList({
       <EmptyState icon={Search}>
         {needle
           ? "No sessions match this search."
-          : hasActiveSessionFilters(filters)
+          : hasActiveSessionFilters(filters) || archivedHidden > 0
             ? "No sessions match these filters."
             : // Every one it started is gone; the filter still lists them.
               `The sessions ${agent.name} started have since been deleted.`}

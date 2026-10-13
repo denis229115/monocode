@@ -59,6 +59,12 @@ export type MonoOverviewChanges = {
   projects: readonly string[];
 };
 
+/** A Mono's sessions start without its archived ones. */
+export const DEFAULT_MONO_SESSION_FILTERS: SessionSidebarFilters = {
+  ...DEFAULT_SESSION_SIDEBAR_FILTERS,
+  hideArchived: true,
+};
+
 type Route = { kind: "new-habit" } | { kind: "habit"; id: string };
 
 type Props = {
@@ -125,7 +131,7 @@ export function MonoOverview({
   const [routes, setRoutes] = useState<Route[]>([]);
   const [query, setQuery] = useState("");
   const [filters, setFilters] = useState<SessionSidebarFilters>(
-    DEFAULT_SESSION_SIDEBAR_FILTERS,
+    DEFAULT_MONO_SESSION_FILTERS,
   );
   // Archived sessions the list leaves out are not counted on the tab.
   const [archivedHidden, setArchivedHidden] = useState(0);
@@ -137,7 +143,7 @@ export function MonoOverview({
   useEffect(() => {
     setRoutes([]);
     setQuery("");
-    setFilters(DEFAULT_SESSION_SIDEBAR_FILTERS);
+    setFilters(DEFAULT_MONO_SESSION_FILTERS);
   }, [monoId]);
   const push = (route: Route) => setRoutes((current) => [...current, route]);
   const back = () => setRoutes((current) => current.slice(0, -1));
@@ -408,6 +414,7 @@ function SessionSearchBar({
           harnesses={harnesses}
           unavailableOption
           hideArchivedOption
+          defaultFilters={DEFAULT_MONO_SESSION_FILTERS}
           filters={filters}
           onChange={onFiltersChange}
           onClose={() => setMenu(null)}

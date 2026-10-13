@@ -29,7 +29,6 @@ export const DEFAULT_SESSION_STATUS_FILTER: SessionStatusFilter = {
 
 export const DEFAULT_SESSION_SIDEBAR_FILTERS: SessionSidebarFilters = {
   showArchived: false,
-  hideArchived: true,
   hiddenHarnesses: [],
   time: "all",
   status: DEFAULT_SESSION_STATUS_FILTER,

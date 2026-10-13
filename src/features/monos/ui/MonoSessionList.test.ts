@@ -297,7 +297,7 @@ it("narrows its cards by search, project and the sidebar's filters", async () =>
   expect(container.textContent).toContain("No sessions match this search.");
 });
 
-it("hides archived sessions by default and reports how many it left out", async () => {
+it("hides archived sessions while hiding is on and reports how many it left out", async () => {
   vi.mocked(listSessionsByProject).mockImplementation(async (cwd) => [
     {
       id: cwd === "/repo" ? launch.sessionId : "app-second",
@@ -326,7 +326,11 @@ it("hides archived sessions by default and reports how many it left out", async 
           onOpenSession,
           onArchivedHidden,
           ...(filters && {
-            filters: { ...DEFAULT_SESSION_SIDEBAR_FILTERS, ...filters },
+            filters: {
+              ...DEFAULT_SESSION_SIDEBAR_FILTERS,
+              hideArchived: true,
+              ...filters,
+            },
           }),
         }),
       ),
@@ -336,7 +340,7 @@ it("hides archived sessions by default and reports how many it left out", async 
       (card) => card.textContent ?? "",
     );
 
-  await show();
+  await show({});
   expect(cards()).toHaveLength(1);
   expect(cards()[0]).toContain("Fix login");
   expect(onArchivedHidden).toHaveBeenLastCalledWith(1);
@@ -348,6 +352,28 @@ it("hides archived sessions by default and reports how many it left out", async 
   expect(cards()).toHaveLength(1);
   expect(cards()[0]).toContain("Saved review");
   expect(onArchivedHidden).toHaveBeenLastCalledWith(0);
+});
+
+it("says its archived sessions are hidden, not deleted, when all of them are", async () => {
+  vi.mocked(listSessionsByProject).mockResolvedValue([
+    {
+      id: launch.sessionId,
+      cwd: "/repo",
+      harness: "codex",
+      model: "gpt-6",
+      runtimeMode: "default",
+      title: "Saved review",
+      archived: true,
+      createdAt: 1,
+      updatedAt: 2,
+    } as SessionSummary,
+  ]);
+  await render([], [launch], {
+    filters: { ...DEFAULT_SESSION_SIDEBAR_FILTERS, hideArchived: true },
+  });
+  expect(container.querySelector("[data-session-card]")).toBeNull();
+  expect(container.textContent).toContain("No sessions match these filters.");
+  expect(container.textContent).not.toContain("deleted");
 });
 
 it("mounts a page of cards at a time and the next as the list nears its end", async () => {

@@ -120,10 +120,11 @@ describe("filterMonoSessionsByArchive", () => {
   const ids = (filters: Partial<typeof DEFAULT_SESSION_SIDEBAR_FILTERS>) =>
     filterMonoSessionsByArchive(rows, {
       ...DEFAULT_SESSION_SIDEBAR_FILTERS,
+      hideArchived: true,
       ...filters,
     }).map((row) => row.id);
 
-  it("hides archived sessions by default", () => {
+  it("hides archived sessions while hiding is on", () => {
     expect(ids({})).toEqual(["a1"]);
   });
 
