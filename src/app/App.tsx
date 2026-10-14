@@ -13575,7 +13575,10 @@ function Workspace({
               inboxViewOpen ||
               notesViewOpen ||
               automationsViewOpen ||
-              settingsOpen ? null : (
+              settingsOpen ||
+              // A Mono in full view shows its own plan usage beside the
+              // composer, where its account is picked.
+              monoCovers ? null : (
                 <UsageFooter
                   providers={usageProviders}
                   session={usageSession}
