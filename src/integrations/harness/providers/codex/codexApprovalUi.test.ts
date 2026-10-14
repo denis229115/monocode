@@ -52,6 +52,12 @@ function InputNotifications({ session }: { session: Session }) {
   return null;
 }
 
+/** A button's text without the number hint an option row ends in. */
+function optionText(button: Element): string {
+  const hint = button.querySelector("[data-question-digit]")?.textContent ?? "";
+  return (button.textContent ?? "").trim().replace(new RegExp(`${hint}$`), "").trim();
+}
+
 describe("Codex requests reach the chat and notifications", () => {
   let root: Root;
   let container: HTMLDivElement;
@@ -205,8 +211,8 @@ describe("Codex requests reach the chat and notifications", () => {
       const button = (label: string) =>
         Array.from(form()!.querySelectorAll("button")).find((candidate) =>
           label === "Other"
-            ? candidate.textContent?.trim().startsWith(label)
-            : candidate.textContent?.trim() === label,
+            ? optionText(candidate).startsWith(label)
+            : optionText(candidate) === label,
         )!;
       expect(button("Continue").disabled).toBe(true);
       if (action === "skip") {
@@ -288,7 +294,7 @@ describe("Codex requests reach the chat and notifications", () => {
     const buttons = () => Array.from(container.querySelectorAll("button"));
     await act(async () =>
       buttons()
-        .find((b) => b.textContent?.trim() === "Decline")!
+        .find((b) => optionText(b) === "Decline")!
         .click(),
     );
     await act(async () =>
@@ -411,7 +417,7 @@ describe("Codex requests reach the chat and notifications", () => {
       );
       if (action !== "timeout") {
         const option = Array.from(container.querySelectorAll("button")).find(
-          (b) => b.textContent?.trim() === "Local",
+          (b) => optionText(b) === "Local",
         )!;
         await act(async () => {
           option.dispatchEvent(
