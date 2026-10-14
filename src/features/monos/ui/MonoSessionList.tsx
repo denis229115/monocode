@@ -27,12 +27,16 @@ import {
 } from "../../sessions/model/sessionFilters";
 import { fuzzyMatch } from "../../../shared/lib/fuzzy";
 import {
-  sessionNeedsInput,
+  sessionBlockedOnInput,
   type MonoSpawnedSession,
   type Session,
 } from "../../sessions/model/session";
 import { SessionCard } from "../../../app/shell/Sidebar";
 import type { MonoLook } from "../model/mono";
+import {
+  monoLaunchesNeedingInput,
+  type SavedWaiting,
+} from "../model/monoLaunchInput";
 import { EmptyState, PageHeader } from "./monoPanelParts";
 
 /** A launched session open over the overview, live and fully usable. */
@@ -56,6 +60,7 @@ export function MonoSessionList({
   launches,
   sessions,
   history = [],
+  savedWaiting,
   query = "",
   filters = DEFAULT_SESSION_SIDEBAR_FILTERS,
   onArchivedHidden,
@@ -65,6 +70,8 @@ export function MonoSessionList({
   launches: readonly MonoSpawnedSession[];
   sessions: readonly Session[];
   history?: readonly SessionSummary[];
+  /** Saved chats with a card waiting, for launches that are not open. */
+  savedWaiting?: SavedWaiting;
   /** Narrows the cards as the sidebar's session search does. */
   query?: string;
   filters?: SessionSidebarFilters;
@@ -197,14 +204,21 @@ export function MonoSessionList({
       )
       .map((launch) => launch.sessionId),
   );
+  // Waiting on the user: an open session by itself, a saved one by its card.
+  const waitingIds = monoLaunchesNeedingInput(launches, sessions, savedWaiting);
+  // A blocked approval keeps the sidebar's wording; a card or a question that
+  // waits to be answered is input.
+  const waitingLabel = (id: string) => {
+    const live = sessions.find((entry) => entry.id === id);
+    return live && sessionBlockedOnInput(live) ? undefined : "Needs input";
+  };
   const busyIds = new Set<string>();
   const approvalIds = new Set<string>();
   const doneIds = new Set<string>();
   for (const row of rows) {
     const live = sessions.find((entry) => entry.id === row.id);
     if (live?.busy) busyIds.add(row.id);
-    else if (live && sessionNeedsInput(live))
-      approvalIds.add(row.id);
+    else if (waitingIds.has(row.id)) approvalIds.add(row.id);
     else if (live || row.createdAt) doneIds.add(row.id);
   }
   const filtered = filterSessionsByStatus(
@@ -304,7 +318,11 @@ export function MonoSessionList({
             : saved;
           if (summary)
             return (
-              <div key={launch.sessionId} data-mono-session={launch.sessionId}>
+              <div
+                key={launch.sessionId}
+                data-mono-session={launch.sessionId}
+                data-needs-input={waitingIds.has(launch.sessionId) || undefined}
+              >
                 <SessionCard
                   session={summary}
                   modelInFooter
@@ -313,7 +331,8 @@ export function MonoSessionList({
                   busy={!!live?.busy}
                   done={false}
                   linkedUpdate={false}
-                  needsApproval={!!live && sessionNeedsInput(live)}
+                  needsApproval={waitingIds.has(launch.sessionId)}
+                  approvalLabel={waitingLabel(launch.sessionId)}
                   project={
                     agent.projects.find(
                       (project) => project.path === summary.cwd,
@@ -337,6 +356,7 @@ export function MonoSessionList({
               data-mono-session={loading ? undefined : launch.sessionId}
               data-mono-session-loading={loading ? launch.sessionId : undefined}
               data-mono-session-unavailable={unavailable ? "" : undefined}
+              data-needs-input={waitingIds.has(launch.sessionId) || undefined}
               // Until it is known, hold its place without a card of another
               // look that the real one would replace a moment later.
               aria-hidden={loading || undefined}
@@ -372,7 +392,8 @@ export function MonoSessionList({
                 busy={false}
                 done={false}
                 linkedUpdate={false}
-                needsApproval={false}
+                needsApproval={waitingIds.has(launch.sessionId)}
+                approvalLabel={waitingLabel(launch.sessionId)}
                 project={projectLabel(launch.cwd)}
                 now={0}
                 onSelect={(id) => {

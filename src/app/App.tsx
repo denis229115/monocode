@@ -102,8 +102,8 @@ import {
 } from "../features/monos/ui/MonoOverview";
 import { MonoSettingsDialog } from "../features/monos/ui/MonoSettingsDialog";
 import { MonoActivityView } from "../features/monos/ui/MonoActivityView";
+import { monoLaunchState } from "../features/monos/model/monoLaunchInput";
 import {
-  launchedSessionState,
   monoSpawnedSessions,
   recordMonoSpawnedSession,
   type LaunchedSessionState,
@@ -12818,13 +12818,13 @@ function Workspace({
   const monoLaunchesKey = JSON.stringify(
     monoLaunches.map((launch) => {
       const live = sessions.find((entry) => entry.id === launch.sessionId);
-      return live
-        ? [launch.sessionId, launchedSessionState(live), live.title]
-        : [
-            launch.sessionId,
-            "done",
-            storedLaunchTitles.get(launch.sessionId) || launch.title,
-          ];
+      return [
+        launch.sessionId,
+        monoLaunchState(live, launch.sessionId, savedWaiting),
+        live
+          ? live.title
+          : storedLaunchTitles.get(launch.sessionId) || launch.title,
+      ];
     }),
   );
   const monoLaunchedSessions = useMemo(
@@ -12889,6 +12889,7 @@ function Workspace({
         launches={monoLaunches}
         sessions={sessions}
         history={history}
+        savedWaiting={savedWaiting}
         documents={monoDocuments}
         activity={monoActivityView}
         changes={{

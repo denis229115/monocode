@@ -15,6 +15,10 @@ import { artifactLabel, type ArtifactCard } from "../../artifacts/artifacts";
 import type { SessionSummary } from "../../sessions/data/sessionStore";
 import type { MonoSpawnedSession, Session } from "../../sessions/model/session";
 import type { MonoLook, MonoState } from "../model/mono";
+import {
+  monoLaunchesNeedingInput,
+  type SavedWaiting,
+} from "../model/monoLaunchInput";
 import { HABITS_MAX } from "../model/monoHabits";
 import { HabitPage } from "./HabitPage";
 import { NewHabitPage } from "./NewHabitPage";
@@ -85,6 +89,8 @@ type Props = {
   launches: readonly MonoSpawnedSession[];
   sessions: readonly Session[];
   history?: readonly SessionSummary[];
+  /** Saved chats with a card waiting, for launches that are not open. */
+  savedWaiting?: SavedWaiting;
   /** Documents it has written, oldest first. */
   documents: readonly ArtifactCard[];
   changes?: MonoOverviewChanges;
@@ -119,6 +125,7 @@ export function MonoOverview({
   launches,
   sessions,
   history,
+  savedWaiting,
   documents,
   changes,
   activity,
@@ -237,6 +244,9 @@ export function MonoOverview({
     changes: changes?.totals?.files,
   };
 
+  // The folded Sessions tab dots its icon while a sub-agent waits on an answer.
+  const waiting = monoLaunchesNeedingInput(launches, sessions, savedWaiting);
+
   return (
     <MonoSidebar
       open={open}
@@ -250,7 +260,12 @@ export function MonoOverview({
         <MonoSidebarHeader
           title="Overview"
           heading={
-            <OverviewTabs tab={tab} counts={counts} onChange={onTabChange} />
+            <OverviewTabs
+              tab={tab}
+              counts={counts}
+              waiting={waiting.size}
+              onChange={onTabChange}
+            />
           }
           onClose={onClose}
           actions={
@@ -341,6 +356,7 @@ export function MonoOverview({
                   launches={[...launches].reverse()}
                   sessions={sessions}
                   history={history}
+                  savedWaiting={savedWaiting}
                   query={query}
                   filters={filters}
                   onArchivedHidden={setArchivedHidden}
@@ -467,10 +483,13 @@ function SessionSearchBar({
 function OverviewTabs({
   tab,
   counts,
+  waiting,
   onChange,
 }: {
   tab: MonoOverviewTab;
   counts: Record<(typeof TABS)[number]["id"], number | undefined>;
+  /** Sessions waiting on an answer. */
+  waiting: number;
   onChange: (tab: MonoOverviewTab) => void;
 }) {
   return (
@@ -490,7 +509,12 @@ function OverviewTabs({
             count={counts[id]}
             // Folded tabs dot their icon, as the rail does, when they hold
             // something new.
-            dot={id === "changes" && !selected && !!counts[id]}
+            dot={
+              !selected &&
+              ((id === "changes" && !!counts[id]) ||
+                (id === "sessions" && waiting > 0))
+            }
+            dotTone={id === "sessions" ? "amber" : "accent"}
             role="tab"
             aria-selected={selected}
             aria-label={label}
@@ -512,6 +536,7 @@ function TabButton({
   selected,
   count,
   dot = false,
+  dotTone = "accent",
   onClick,
   ...aria
 }: {
@@ -520,6 +545,7 @@ function TabButton({
   selected: boolean;
   count?: number;
   dot?: boolean;
+  dotTone?: "accent" | "amber";
   onClick: () => void;
   role?: "tab";
   "aria-selected"?: boolean;
@@ -540,14 +566,18 @@ function TabButton({
       }`}
     >
       {dot ? (
-        <span className="relative grid shrink-0" data-changes-dot>
+        <span
+          className="relative grid shrink-0"
+          data-changes-dot={dotTone === "accent" ? "" : undefined}
+          data-needs-input-dot={dotTone === "amber" ? "" : undefined}
+        >
           <Icon
             className="overview-tab-icon-with-dot size-3.5"
             strokeWidth={1.75}
           />
           <span
             aria-hidden
-            className="absolute -top-0.5 left-2.5 size-1.5 rounded-full bg-accent"
+            className={`absolute -top-0.5 left-2.5 size-1.5 rounded-full ${dotTone === "amber" ? "bg-amber-400" : "bg-accent"}`}
           />
         </span>
       ) : (

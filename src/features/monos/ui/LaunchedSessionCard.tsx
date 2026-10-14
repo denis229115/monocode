@@ -77,8 +77,9 @@ const STATUS: Record<LaunchedSessionState, { label: string; icon: ReactNode }> =
 /**
  * A session the Mono started, as a line under its reply like an artifact:
  * a spinner while it works, a check once it is done, and the project it runs
- * in. Without `view` (a window that does not track sessions) it shows no
- * status.
+ * in. While it waits on an answer the card turns amber, says so and offers to
+ * open the session, where the question is answered. Without `view` (a window
+ * that does not track sessions) it shows no status.
  */
 export function LaunchedSessionCard({
   launch,
@@ -97,18 +98,9 @@ export function LaunchedSessionCard({
     launch.harness,
   );
   const status = view ? STATUS[view.state] : undefined;
-  return (
-    <button
-      type="button"
-      data-launched-session={launch.sessionId}
-      data-state={view?.state}
-      aria-label={`Open session ${title}${status ? `, ${status.label.toLowerCase()}` : ""}`}
-      aria-pressed={open}
-      title={status?.label}
-      onClick={onOpen}
-      disabled={!onOpen}
-      className={`flex w-fit max-w-[min(24rem,100%)] min-w-0 items-center gap-2.5 rounded-xl border py-1.5 pr-1.5 pl-3 text-left font-sans transition-colors hover:border-content/20 hover:bg-content/5 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent disabled:opacity-60 ${open ? "border-content/20 bg-content/5" : "border-content/10"}`}
-    >
+  const waiting = view?.state === "input";
+  const label = (
+    <>
       {status?.icon ?? (
         <Chatting
           className="size-4 shrink-0 text-content/45"
@@ -116,6 +108,15 @@ export function LaunchedSessionCard({
         />
       )}
       <span className="min-w-0 truncate text-[13px] text-content">{title}</span>
+      {/* The one state that asks something of the reader says so in words. */}
+      {waiting ? (
+        <span
+          data-launched-session-waiting
+          className="shrink-0 whitespace-nowrap text-[12px] text-amber-400"
+        >
+          Needs input
+        </span>
+      ) : null}
       {/* Squeezed, the title gives way first and the project after it. */}
       <span
         className="flex min-w-0 max-w-[45%] shrink-0 items-center gap-1 rounded-full border border-content/10 bg-content/5 px-2 py-0.5 text-[12px] text-content/65"
@@ -124,6 +125,50 @@ export function LaunchedSessionCard({
         <HarnessIcon harness={launch.harness} className="size-3.5 shrink-0" />
         <span className="min-w-0 truncate">{projectName(launch.cwd)}</span>
       </span>
-    </button>
+    </>
+  );
+  const main = {
+    type: "button" as const,
+    "data-launched-session": launch.sessionId,
+    "data-state": view?.state,
+    "aria-label": `Open session ${title}${status ? `, ${status.label.toLowerCase()}` : ""}`,
+    "aria-pressed": open,
+    title: status?.label,
+    onClick: onOpen,
+    disabled: !onOpen,
+  };
+  if (!waiting)
+    return (
+      <button
+        {...main}
+        className={`flex w-fit max-w-[min(24rem,100%)] min-w-0 items-center gap-2.5 rounded-xl border py-1.5 pr-1.5 pl-3 text-left font-sans transition-colors hover:border-content/20 hover:bg-content/5 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent disabled:opacity-60 ${open ? "border-content/20 bg-content/5" : "border-content/10"}`}
+      >
+        {label}
+      </button>
+    );
+  // The action is a second button beside the first, since buttons do not nest.
+  return (
+    <div
+      data-launched-session-card={launch.sessionId}
+      className="flex w-fit max-w-[min(32rem,100%)] min-w-0 items-center gap-1.5 rounded-xl border border-amber-400/40 bg-amber-400/5 py-1 pr-1.5 pl-1 font-sans"
+    >
+      <button
+        {...main}
+        className="flex min-w-0 items-center gap-2.5 rounded-lg py-0.5 pr-1 pl-2 text-left transition-colors hover:bg-amber-400/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent disabled:opacity-60"
+      >
+        {label}
+      </button>
+      {onOpen ? (
+        <button
+          type="button"
+          data-launched-session-open={launch.sessionId}
+          aria-label={`Open ${title} to answer its question`}
+          onClick={onOpen}
+          className="shrink-0 rounded-md px-2 py-0.5 text-[12px] font-medium whitespace-nowrap text-accent transition-colors hover:bg-content/8 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+        >
+          Open session
+        </button>
+      ) : null}
+    </div>
   );
 }

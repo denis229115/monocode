@@ -3350,6 +3350,7 @@ export const SessionCard = memo(function SessionCard({
   done,
   linkedUpdate,
   needsApproval,
+  approvalLabel,
   dropTarget,
   compact = false,
   modelInFooter = false,
@@ -3374,6 +3375,8 @@ export const SessionCard = memo(function SessionCard({
   done: boolean;
   linkedUpdate: boolean;
   needsApproval: boolean;
+  /** Names what it waits on; an approval unless it orchestrates. */
+  approvalLabel?: string;
   dropTarget?: boolean;
   compact?: boolean;
   /** Shows the model as its provider's mark beside the branch, so the title
@@ -3441,7 +3444,9 @@ export const SessionCard = memo(function SessionCard({
       {needsApproval ? (
         <>
           <CircleAlert className="size-3" strokeWidth={1.75} />
-          <span>{orchestration ? "Needs input" : "Need approval"}</span>
+          <span>
+            {approvalLabel ?? (orchestration ? "Needs input" : "Need approval")}
+          </span>
         </>
       ) : busy ? (
         <>
