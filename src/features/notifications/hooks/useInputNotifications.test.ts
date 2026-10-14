@@ -23,6 +23,8 @@ const invoke = vi.hoisted(() =>
   }),
 );
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+const play = vi.hoisted(() => vi.fn());
+vi.mock("cuelume", () => ({ play, setEnabled: vi.fn(), setVolume: vi.fn() }));
 
 function Notifications({
   sessions,
@@ -98,6 +100,7 @@ describe("input notification delivery", () => {
       },
     });
     invoke.mockClear();
+    play.mockClear();
     saveNotificationsEnabled(true);
     setWindowFocused(false);
     await probeNotificationPermission();
@@ -199,6 +202,7 @@ describe("input notification delivery", () => {
     session = { ...session, blocks: [approval(1, "Visible request")] };
     await render([session], "first");
     expect(banners()).toEqual([]);
+    expect(play.mock.calls).toEqual([["arrival"]]);
     session = {
       ...session,
       pendingQuestion: question(2, "Hidden session question"),
@@ -213,6 +217,7 @@ describe("input notification delivery", () => {
       "other",
     );
     expect(banners()).toHaveLength(1);
+    expect(play).toHaveBeenCalledTimes(2);
   });
 
   it("notifies a new decision card once, by its first question", async () => {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from "react";
-import { notifySession, pendingInputNotifications } from "../model/notifications";
+import { announceSessionInput, pendingInputNotifications } from "../model/notifications";
 import type { Session } from "../../sessions/model/session";
 
 export function useInputNotifications(
@@ -51,7 +51,7 @@ export function useInputNotifications(
       if (event.kind === "decision")
         seenCards.get(session.id)?.add(event.cardId);
       else notified.add(key);
-      void notifySession(
+      void announceSessionInput(
         session,
         event,
         session.id === activeSessionId,
