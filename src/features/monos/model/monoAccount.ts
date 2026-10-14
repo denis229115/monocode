@@ -42,7 +42,7 @@ export function pickMonoAccount(
  * The account the Mono's conversation belongs on: its choice, else the
  * account the conversation already uses, else (before it has started) the one
  * selected for its folder today. A removed one becomes the default account,
- * flagged so the selector can say so.
+ * flagged as removed.
  */
 export function monoAccountState(
   mono: Pick<Mono, "accounts">,

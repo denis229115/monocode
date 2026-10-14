@@ -257,9 +257,6 @@ type Props = {
   worktreeRemoved?: boolean;
   onManageWorktrees?: () => void;
   onNewTerminal?: () => void;
-  /** The account the conversation runs on, shown in the model selector. */
-  accountId?: string;
-  onAccountChange?: (accountId: string) => void;
   onModelChange: (harness: HarnessId, model: string) => void;
   onModelSettingsChange?: (settings: Record<string, string>) => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
@@ -384,8 +381,6 @@ export function Composer({
   worktreeRemoved = false,
   onManageWorktrees,
   onNewTerminal,
-  accountId,
-  onAccountChange,
   onModelChange,
   onModelSettingsChange,
   onRuntimeModeChange,
@@ -2361,8 +2356,6 @@ export function Composer({
                   project={cwd}
                   hideSettings={controlsBeside}
                   hotkeys={hotkeys && enabled}
-                  accountId={accountId}
-                  onAccountChange={onAccountChange}
                   onChange={onModelChange}
                   onSettingsChange={(settings) =>
                     onModelSettingsChange?.(settings)

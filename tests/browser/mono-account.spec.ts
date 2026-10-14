@@ -20,46 +20,41 @@ const log = async (page: Page) =>
     handOver: boolean;
   }[];
 
-const trigger = (page: Page) =>
-  page.locator("[data-mono-model] button[aria-keyshortcuts]");
-const settingsTrigger = (page: Page) =>
-  page.locator("[data-mono-settings] button[aria-keyshortcuts]");
-const accounts = (page: Page) =>
-  page.getByRole("radiogroup", { name: "Account" });
-const radios = (page: Page) => accounts(page).getByRole("radio");
+const modelTrigger = (page: Page) =>
+  page.locator("button[aria-keyshortcuts]").first();
+const chip = (page: Page) =>
+  page.getByRole("button", { name: /usage details/ });
+const switchAccount = (page: Page) =>
+  page.getByRole("button", { name: /^Switch .* account$/ });
 
-test("with one account (or a provider without profiles) the selector shows no account", async ({
-  page,
-}, info) => {
-  await open(page, "?accounts=one");
-  await trigger(page).click();
-  await expect(page.getByRole("dialog", { name: "Models" })).toBeVisible();
-  await expect(radios(page)).toHaveCount(0);
-  await proof(page, "before-one-account", info.project.name);
-  await page.keyboard.press("Escape");
-  await open(page, "?harness=devin");
-  await trigger(page).click();
-  await expect(radios(page)).toHaveCount(0);
-});
-
-test("each Mono picks its account in the model selector and its chat is handed over", async ({
+test("the model selector has no account row, even with several accounts", async ({
   page,
 }, info) => {
   await open(page);
-  await expect(trigger(page)).not.toContainText("·");
-  await trigger(page).click();
-  await expect(radios(page)).toHaveText(["Default account", "Work"]);
-  await proof(page, "after-selector-default", info.project.name);
-  await accounts(page).getByRole("radio", { name: "Work" }).click();
-  await expect(accounts(page).getByRole("radio", { name: "Work" })).toHaveAttribute(
-    "aria-checked",
-    "true",
-  );
-  await expect(trigger(page)).toContainText("· Work");
-  await proof(page, "after-selector-work", info.project.name);
-  await page.keyboard.press("Escape");
-  // The chip at the bottom follows, and only this Mono's chat moved.
-  await expect(page.getByRole("contentinfo")).toContainText("Work");
+  await expect(modelTrigger(page)).not.toContainText("·");
+  await modelTrigger(page).click();
+  await expect(page.getByRole("dialog", { name: "Models" })).toBeVisible();
+  await expect(page.getByRole("radiogroup", { name: "Account" })).toHaveCount(0);
+  await expect(page.getByText("Account", { exact: true })).toHaveCount(0);
+  await page.waitForTimeout(400); // let the popover finish fading in
+  await proof(page, "model-selector-no-account", info.project.name);
+});
+
+test("a Mono picks its account in the composer's usage chips and its chat is handed over", async ({
+  page,
+}, info) => {
+  await open(page);
+  await expect(chip(page)).toContainText("20%");
+  await chip(page).click();
+  await switchAccount(page).click();
+  await expect(page.getByRole("group", { name: /accounts$/ })).toBeVisible();
+  await proof(page, "composer-chips-account-picker", info.project.name);
+  await page.getByRole("button", { name: "Work" }).click();
+  // The chip now reads the Work account's usage, and the selector gained nothing.
+  await expect(chip(page)).toContainText("65%");
+  await expect(modelTrigger(page)).not.toContainText("·");
+  await proof(page, "composer-chips-after-pick", info.project.name);
+  // Only this Mono's chat moved, and it carries its transcript over.
   await expect.poll(() => log(page)).toEqual([
     { id: "chat-pixi", account: "account-work", thread: null, handOver: true },
     {
@@ -70,52 +65,39 @@ test("each Mono picks its account in the model selector and its chat is handed o
     },
   ]);
   await page.locator('[data-select="chat-nova"]').click();
-  await expect(trigger(page)).not.toContainText("·");
-  await expect(page.getByRole("contentinfo")).not.toContainText("Work");
-  await proof(page, "after-nova-on-default", info.project.name);
+  await expect(chip(page)).toContainText("20%");
+  await proof(page, "other-mono-on-default", info.project.name);
 });
 
-test("the usage chip picks the Mono's account too", async ({ page }) => {
-  await open(page);
-  await page.getByRole("button", { name: /usage details/ }).click();
-  await page.getByRole("button", { name: /^Switch .* account$/ }).click();
-  await page.getByRole("button", { name: "Work" }).click();
-  await expect(trigger(page)).toContainText("· Work");
-  await expect.poll(() => log(page)).toMatchObject([
-    { id: "chat-pixi", account: "account-work" },
-    { id: "chat-nova", account: "default" },
-  ]);
+test("without an account callback the chips show usage alone", async ({ page }) => {
+  await open(page, "?picker=off");
+  await chip(page).click();
+  await expect(page.getByRole("dialog", { name: /usage details/ })).toBeVisible();
+  await expect(switchAccount(page)).toHaveCount(0);
 });
 
-test("a Mono whose account was removed uses the default and says so", async ({
+test("with one account the picker lists only it, and a provider without profiles has none", async ({
+  page,
+}) => {
+  await open(page, "?accounts=one");
+  await chip(page).click();
+  await switchAccount(page).click();
+  await expect(
+    page.getByRole("group", { name: /accounts$/ }).getByRole("button"),
+  ).toHaveCount(1);
+  await open(page, "?harness=devin");
+  await chip(page).click();
+  await expect(switchAccount(page)).toHaveCount(0);
+});
+
+test("a Mono whose account was removed shows and uses the default account", async ({
   page,
 }, info) => {
-  await open(page, "?removed=1&settings=1");
-  await settingsTrigger(page).click();
-  await expect(page.locator("[data-model-account-notice]")).toHaveText(
-    "Its account was removed, so it uses the default account.",
-  );
-  await expect(
-    accounts(page).getByRole("radio", { name: "Default account" }),
-  ).toHaveAttribute("aria-checked", "true");
+  await open(page, "?removed=1");
+  await expect(chip(page)).toContainText("20%");
   await expect.poll(() => log(page)).toMatchObject([
     { id: "chat-pixi", account: "default", handOver: true },
     { id: "chat-nova", account: "default", handOver: false },
   ]);
-  await proof(page, "after-removed-account", info.project.name);
-});
-
-test("a normal chat's selector offers the same choice and asks the app", async ({
-  page,
-}, info) => {
-  await open(page, "?chat=1");
-  const composer = page.locator("[data-chat]");
-  const chatTrigger = composer.locator('button[aria-haspopup="menu"]');
-  await expect(chatTrigger).not.toContainText("·");
-  await chatTrigger.click();
-  await page.getByRole("menuitem", { name: /^Model/ }).hover();
-  await accounts(page).getByRole("radio", { name: "Work" }).click();
-  await expect(chatTrigger).toContainText("· Work");
-  await expect(page.locator("[data-chat-account]")).toHaveText("account-work");
-  await proof(page, "after-chat-selector", info.project.name);
+  await proof(page, "removed-account-falls-back", info.project.name);
 });

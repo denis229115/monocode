@@ -74,6 +74,8 @@ import { ModelControlPills, ModelPicker } from "./ModelPicker";
 import { ContextMeter } from "./ContextMeter";
 import { UsageChips } from "../../../app/shell/UsageFooter";
 import type { RateLimitProvider } from "../../providers/model/rateLimits";
+import type { ProviderAccountProvider } from "../../providers/model/providerAccounts";
+import { monoAccountState } from "../../monos/model/monoAccount";
 import { MonoUsageLimitNotice } from "../../monos/ui/MonoUsageLimitNotice";
 import { QuestionForm } from "./QuestionForm";
 import { DecisionCardPanel } from "./DecisionCards";
@@ -125,8 +127,6 @@ import type { SessionFolderTarget } from "../model/sessionFolders";
 import { markLinkedSessionUpdateSeen } from "../../inbox/model/linkedSessionSeen";
 import { RemoteSession } from "../../connections/ui/RemoteSession";
 import { isRemoteProjectPath } from "../../projects/model/recents";
-import { requestSessionAccount } from "../../providers/model/sessionAccountRequest";
-import { useSessionAccountId } from "./ModelAccountSwitch";
 import type { HostSession } from "../../connections/model/protocol";
 
 export type SessionPaneProps = {
@@ -208,6 +208,12 @@ export type SessionPaneProps = {
   onUsageLimitResumeAtReset: (sessionId: string, enabled: boolean) => void;
   onUsageLimitDismiss: (sessionId: string) => void;
   onUsageLimitAccountChange?: (sessionId: string, accountId: string) => void;
+  /** A pick in a Mono composer's usage chips; without it they show usage alone. */
+  onPickMonoAccount?: (
+    sessionId: string,
+    provider: ProviderAccountProvider,
+    accountId: string,
+  ) => void;
   onInboxCardDismiss?: (sessionId: string) => void;
   onLinkedWorkItemUpdateCardDismiss?: (sessionId: string) => void;
   onNoteCardDismiss?: (sessionId: string) => void;
@@ -348,6 +354,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
   onUsageLimitResumeAtReset,
   onUsageLimitDismiss,
   onUsageLimitAccountChange,
+  onPickMonoAccount,
   onInboxCardDismiss,
   onLinkedWorkItemUpdateCardDismiss,
   onNoteCardDismiss,
@@ -386,7 +393,6 @@ const LocalSessionPane = memo(function LocalSessionPane({
     orchestrator.snapshot,
     orchestrator.snapshot,
   );
-  const accountId = useSessionAccountId(session);
   const managed = orchestrationRuns.some(
     (run) =>
       (run.status === "active" || run.status === "paused") &&
@@ -744,8 +750,6 @@ const LocalSessionPane = memo(function LocalSessionPane({
       worktreeRemoved={session.worktreeRemoved}
       onManageWorktrees={onManageWorktrees}
       onNewTerminal={() => onNewTerminal(session.id)}
-      accountId={accountId}
-      onAccountChange={(next) => requestSessionAccount(session.id, next)}
       onModelChange={(harness, model) => {
         onModelChange(session.id, harness, model);
         const selected = resolveModel(harness, model);
@@ -1224,8 +1228,8 @@ const LocalSessionPane = memo(function LocalSessionPane({
                       onSubmit(session.id, text, attachments)
                     }
                     // The plan's usage, as the session footer shows it,
-                    // which a Mono in full view covers. Its account moves
-                    // with the usage-limit notice, not here. A narrow chat
+                    // which a Mono in full view covers, with the Mono's own
+                    // account to pick where it has several. A narrow chat
                     // drops it first, then shows the model controls as icons.
                     tools={
                       <div className="flex shrink-0 items-center gap-0.5 text-[11px] text-content/55 @max-md:hidden">
@@ -1235,10 +1239,25 @@ const LocalSessionPane = memo(function LocalSessionPane({
                             id: session.id,
                             harness: session.harness,
                             model: session.model,
-                            providerAccountId: session.providerAccountId,
+                            // The Mono's pick shows at once; its chat
+                            // follows once it is idle.
+                            providerAccountId:
+                              (mono
+                                ? monoAccountState(mono, session).accountId
+                                : undefined) ?? session.providerAccountId,
                           }}
                           project={session.cwd}
-                          accountPicker={false}
+                          accountPicker={!!onPickMonoAccount}
+                          onPickAccount={
+                            onPickMonoAccount
+                              ? (provider, accountId) =>
+                                  onPickMonoAccount(
+                                    session.id,
+                                    provider,
+                                    accountId,
+                                  )
+                              : undefined
+                          }
                           variant="composer"
                         />
                       </div>
@@ -1254,10 +1273,6 @@ const LocalSessionPane = memo(function LocalSessionPane({
                           hideSettings
                           hotkeys={focused && !btw.open}
                           variant="text"
-                          accountId={accountId}
-                          onAccountChange={(next) =>
-                            requestSessionAccount(session.id, next)
-                          }
                           labelClassName="@max-sm:hidden"
                           onChange={(harness, model) =>
                             onModelChange(session.id, harness, model)
