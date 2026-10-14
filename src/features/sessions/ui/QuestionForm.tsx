@@ -18,6 +18,11 @@ import {
   type UserQuestionReply,
 } from "../model/userQuestion";
 import { parseStandaloneHttpUrl } from "../model/linkPreview";
+import {
+  QUESTION_DIGIT_LIMIT,
+  questionDigitAction,
+} from "../model/questionDigit";
+import { useQuestionDigitKeys } from "./useQuestionDigitKeys";
 import { UserLinkPreview } from "./UserLinkPreview";
 
 type Props = {
@@ -41,6 +46,8 @@ export function QuestionForm({
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
   const [custom, setCustom] = useState<Record<string, string>>({});
   const [now, setNow] = useState(Date.now);
+  const root = useRef<HTMLDivElement>(null);
+  const focusCustomNext = useRef(false);
 
   useEffect(() => {
     if (prompt.autoResolveAt == null) return;
@@ -104,12 +111,60 @@ export function QuestionForm({
     if (index > 0) setStep(index - 1);
   };
 
+  // Number keys answer without clicking first; see useQuestionDigitKeys for
+  // which form hears them.
+  useQuestionDigitKeys(root, (event) => {
+    if (!question) return;
+    const action = questionDigitAction({
+      question,
+      options: displayOptions(question),
+      selected: answers[question.id] ?? [],
+      last,
+      key: event.key,
+      modifiers: event,
+      target: event.target,
+    });
+    if (action.type === "ignore") return;
+    event.preventDefault();
+    interact();
+    if (action.type === "advance") {
+      const nextAnswers = { ...answers, [question.id]: [action.optionId] };
+      setAnswers(nextAnswers);
+      if (action.then === "finish") finish(nextAnswers);
+      else setStep(index + 1);
+      return;
+    }
+    setAnswers((current) => ({
+      ...current,
+      [question.id]: nextSelection(
+        question,
+        current[question.id] ?? [],
+        action.optionId,
+      ),
+    }));
+    if (action.focusCustom) focusCustomNext.current = true;
+    else
+      root.current
+        ?.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")
+        [action.index]?.focus();
+  });
+
+  // The typed answer's field exists once its option is selected.
+  useEffect(() => {
+    if (!focusCustomNext.current) return;
+    focusCustomNext.current = false;
+    root.current
+      ?.querySelector<HTMLInputElement>('input[aria-label="Your answer"]')
+      ?.focus();
+  }, [answers]);
+
   if (!question) return null;
 
   const title = question.header?.trim() || prompt.title?.trim() || "Question";
 
   return (
     <div
+      ref={root}
       className="px-1.5 pb-1.5"
       data-question-form
       onPointerDownCapture={interact}
@@ -274,18 +329,7 @@ function QuestionFields({
       onSelect(options[index].id);
       return;
     }
-
-    const shortcut = Number(event.key);
-    if (
-      Number.isInteger(shortcut) &&
-      shortcut >= 1 &&
-      shortcut <= Math.min(options.length, 9)
-    ) {
-      event.preventDefault();
-      const shortcutIndex = shortcut - 1;
-      highlight(shortcutIndex);
-      onSelect(options[shortcutIndex].id);
-    }
+    // Number keys are handled for the whole form by useQuestionDigitKeys.
   };
 
   return (
@@ -355,7 +399,8 @@ function QuestionFields({
                   type="button"
                   aria-pressed={active}
                   aria-keyshortcuts={
-                    optionIndex < 9 ? String(optionIndex + 1) : undefined
+                    optionIndex < QUESTION_DIGIT_LIMIT
+                      ? String(optionIndex + 1) : undefined
                   }
                   data-highlighted={
                     highlighted === optionIndex ? "true" : undefined
@@ -402,6 +447,15 @@ function QuestionFields({
                       </span>
                     ) : null}
                   </span>
+                  {optionIndex < QUESTION_DIGIT_LIMIT ? (
+                    <kbd
+                      aria-hidden
+                      data-question-digit
+                      className="mt-px grid h-4 min-w-4 shrink-0 place-items-center rounded border border-content/12 bg-content/4 px-1 font-sans text-[10px] leading-none text-content/45"
+                    >
+                      {optionIndex + 1}
+                    </kbd>
+                  ) : null}
                 </button>
                 {isCustom && (active || customSelected) ? (
                   <input

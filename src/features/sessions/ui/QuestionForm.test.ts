@@ -110,14 +110,17 @@ describe("QuestionForm keyboard navigation", () => {
     expect(document.activeElement).toBe(options[2]);
   });
 
-  it("uses number keys to focus and select the matching option", () => {
-    const options = renderQuestion();
+  it("answers with a number key while an option has focus", () => {
+    const onReply = vi.fn();
+    const options = renderQuestion(onReply);
     act(() => options[0].focus());
 
     keyDown(options[0], "3");
 
-    expect(document.activeElement).toBe(options[2]);
-    expect(options[2].getAttribute("aria-pressed")).toBe("true");
+    expect(onReply).toHaveBeenCalledWith(7, {
+      kind: "answered",
+      answers: { colour: ["blue"] },
+    });
     expect(options[2].getAttribute("aria-keyshortcuts")).toBe("3");
   });
 
@@ -168,7 +171,11 @@ describe("QuestionForm steps", () => {
 
   function button(label: string): HTMLButtonElement {
     const match = Array.from(container.querySelectorAll("button")).find(
-      (item) => item.textContent?.trim() === label,
+      (item) =>
+        // Option rows end in their number hint, which is not part of the label.
+        (item.textContent ?? "")
+          .replace(item.querySelector("[data-question-digit]")?.textContent ?? "", "")
+          .trim() === label,
     );
     if (!match) throw new Error(`No button labelled ${label}`);
     return match;
@@ -197,6 +204,187 @@ describe("QuestionForm steps", () => {
     expect(onReply).toHaveBeenCalledWith(9, {
       kind: "answered",
       answers: { colour: ["green"], size: ["large"] },
+    });
+  });
+});
+
+describe("QuestionForm number keys", () => {
+  function questions(): UserQuestionPrompt {
+    return {
+      requestId: 11,
+      questions: [
+        {
+          id: "colour",
+          prompt: "Pick a colour",
+          multiSelect: false,
+          allowCustom: true,
+          options: [
+            { id: "red", label: "Red" },
+            { id: "green", label: "Green" },
+          ],
+        },
+        {
+          id: "size",
+          prompt: "Pick a size",
+          multiSelect: false,
+          allowCustom: false,
+          options: [
+            { id: "small", label: "Small" },
+            { id: "large", label: "Large" },
+          ],
+        },
+      ],
+    };
+  }
+
+  function show(
+    prompt: UserQuestionPrompt,
+    onReply: (requestId: number, reply: UserQuestionReply) => void = vi.fn(),
+  ) {
+    act(() => root.render(createElement(QuestionForm, { prompt, onReply })));
+  }
+
+  function press(key: string, target: Element = document.body, init = {}) {
+    const event = new KeyboardEvent("keydown", {
+      key,
+      bubbles: true,
+      cancelable: true,
+      ...init,
+    });
+    act(() => {
+      target.dispatchEvent(event);
+    });
+    return event;
+  }
+
+  it("shows each option's number as a hidden hint beside its shortcut", () => {
+    show(questions());
+    const hints = Array.from(
+      container.querySelectorAll<HTMLElement>("[data-question-digit]"),
+    );
+    // Red, Green and the Other row the question adds.
+    expect(hints.map((hint) => hint.textContent)).toEqual(["1", "2", "3"]);
+    expect(hints.every((hint) => hint.getAttribute("aria-hidden") === "true"))
+      .toBe(true);
+    const buttons = container.querySelectorAll("button[aria-pressed]");
+    expect(buttons[2].getAttribute("aria-keyshortcuts")).toBe("3");
+  });
+
+  it("answers and moves on from the page body, then sends on the last question", () => {
+    const onReply = vi.fn();
+    show(questions(), onReply);
+
+    const first = press("2");
+    expect(first.defaultPrevented).toBe(true);
+    expect(container.textContent).toContain("Pick a size");
+    expect(onReply).not.toHaveBeenCalled();
+
+    press("1");
+    expect(onReply).toHaveBeenCalledWith(11, {
+      kind: "answered",
+      answers: { colour: ["green"], size: ["small"] },
+    });
+  });
+
+  it("leaves digits typed into a text field alone", () => {
+    show(questions());
+    const field = document.createElement("textarea");
+    document.body.append(field);
+    const event = press("2", field);
+    field.remove();
+    expect(event.defaultPrevented).toBe(false);
+    expect(container.textContent).toContain("Pick a colour");
+    expect(container.querySelector("[aria-pressed='true']")).toBeNull();
+  });
+
+  it("ignores digits with a modifier held", () => {
+    show(questions());
+    press("1", document.body, { metaKey: true });
+    press("1", document.body, { ctrlKey: true });
+    expect(container.textContent).toContain("Pick a colour");
+  });
+
+  it("toggles a multi-select option without advancing", () => {
+    const prompt = questions();
+    prompt.questions[0].multiSelect = true;
+    show(prompt);
+    press("1");
+    press("2");
+    const options = container.querySelectorAll("button[aria-pressed]");
+    expect(options[0].getAttribute("aria-pressed")).toBe("true");
+    expect(options[1].getAttribute("aria-pressed")).toBe("true");
+    expect(container.textContent).toContain("Pick a colour");
+    press("1");
+    expect(options[0].getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("selects the Other option and moves focus to its text field", () => {
+    show(questions());
+    press("3");
+    const field = container.querySelector<HTMLInputElement>(
+      'input[aria-label="Your answer"]',
+    );
+    expect(field).not.toBeNull();
+    expect(document.activeElement).toBe(field);
+    expect(container.textContent).toContain("Pick a colour");
+    // Typing a digit there is just typing.
+    const event = press("1", field!);
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("answers in the pane the user last worked in, not both", () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    const single = (id: number): UserQuestionPrompt => ({
+      requestId: id,
+      questions: [
+        {
+          id: "q",
+          prompt: "Go?",
+          multiSelect: false,
+          allowCustom: false,
+          options: [
+            { id: "yes", label: "Yes" },
+            { id: "no", label: "No" },
+          ],
+        },
+      ],
+    });
+    act(() =>
+      root.render(
+        createElement(
+          "div",
+          null,
+          createElement(
+            "section",
+            { "data-session-drop": "a", id: "a" },
+            createElement(QuestionForm, { prompt: single(1), onReply: first }),
+            createElement("p", { id: "a-text" }, "transcript a"),
+          ),
+          createElement(
+            "section",
+            { "data-session-drop": "b", id: "b" },
+            createElement(QuestionForm, { prompt: single(2), onReply: second }),
+            createElement("p", { id: "b-text" }, "transcript b"),
+          ),
+        ),
+      ),
+    );
+    // No pane worked in and two forms: nothing guesses.
+    press("1");
+    expect(first).not.toHaveBeenCalled();
+    expect(second).not.toHaveBeenCalled();
+
+    act(() => {
+      container
+        .querySelector("#b-text")!
+        .dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    });
+    press("2");
+    expect(first).not.toHaveBeenCalled();
+    expect(second).toHaveBeenCalledWith(2, {
+      kind: "answered",
+      answers: { q: ["no"] },
     });
   });
 });
