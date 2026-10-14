@@ -54,9 +54,6 @@ export type ShownMonoSession = {
  */
 const storedSessions = new Map<string, SessionSummary>();
 
-/** A row whose session waits on an answer, tinted as the launch card is. */
-const WAITING_ROW = "rounded-lg bg-amber-400/5 ring-1 ring-amber-400/30";
-
 /** Cards for launched sessions, with where each stands, open or saved. */
 export function MonoSessionList({
   agent,
@@ -325,7 +322,6 @@ export function MonoSessionList({
                 key={launch.sessionId}
                 data-mono-session={launch.sessionId}
                 data-needs-input={waitingIds.has(launch.sessionId) || undefined}
-                className={waitingIds.has(launch.sessionId) ? WAITING_ROW : ""}
               >
                 <SessionCard
                   session={summary}
@@ -367,13 +363,7 @@ export function MonoSessionList({
               aria-disabled={unavailable || undefined}
               inert={loading || unavailable}
               className={
-                loading
-                  ? "invisible"
-                  : unavailable
-                    ? "opacity-50"
-                    : waitingIds.has(launch.sessionId)
-                      ? WAITING_ROW
-                      : ""
+                loading ? "invisible" : unavailable ? "opacity-50" : ""
               }
             >
               <SessionCard
