@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -21,13 +21,10 @@ const pagerButton =
 export function DecisionCardPanel({
   cards,
   cwd,
-  heading,
   onAnswer,
 }: {
   cards: DecisionCard[];
   cwd?: string;
-  /** A line above the card, for who is asking when it is not this chat. */
-  heading?: (card: DecisionCard) => ReactNode;
   onAnswer: (cardId: string, reply: UserQuestionReply) => void;
 }) {
   const [index, setIndex] = useState(0);
@@ -65,7 +62,6 @@ export function DecisionCardPanel({
     ) : undefined;
   return (
     <div data-decision-card={card.id}>
-      {heading?.(card)}
       <QuestionForm
         key={card.id}
         prompt={{ requestId: 0, title: "Decision", questions: card.questions }}

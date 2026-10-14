@@ -36,7 +36,7 @@ import type { MonoLook } from "../model/mono";
 import {
   monoLaunchesNeedingInput,
   type SavedWaiting,
-} from "../model/monoSubagentQuestions";
+} from "../model/monoLaunchInput";
 import { EmptyState, PageHeader } from "./monoPanelParts";
 
 /** A launched session open over the overview, live and fully usable. */

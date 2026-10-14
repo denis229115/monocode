@@ -38,7 +38,6 @@ export type DecisionAnswerHost = {
  * answers, from this window or another, only the first is sent; a retry or a
  * late answer sends nothing. When the claimed answer cannot be sent, the claim
  * is given back and the card waits again. Skipping dismisses without sending.
- * Resolves false when the card was not found or its answer could not be sent.
  */
 export function decisionAnswerer(host: DecisionAnswerHost) {
   const answering = new Set<string>();
@@ -46,11 +45,10 @@ export function decisionAnswerer(host: DecisionAnswerHost) {
     sessionId: string,
     cardId: string,
     reply: UserQuestionReply,
-  ): Promise<boolean> => {
+  ): Promise<void> => {
     const key = `${sessionId}:${cardId}`;
     const card = host.card(sessionId, cardId);
-    if (!card) return false;
-    if (card.outcome || answering.has(key)) return true;
+    if (!card || card.outcome || answering.has(key)) return;
     answering.add(key);
     try {
       const outcome: DecisionOutcome =
@@ -59,7 +57,7 @@ export function decisionAnswerer(host: DecisionAnswerHost) {
           : { kind: "answered", at: host.now(), reply };
       const claim = await host.claim(sessionId, cardId, outcome);
       if (claim.card) host.show(sessionId, claim.card);
-      if (!claim.claimed || reply.kind === "skipped") return true;
+      if (!claim.claimed || reply.kind === "skipped") return;
       let sent = false;
       try {
         sent = await host.send(sessionId, decisionAnswerText(card, reply));
@@ -69,7 +67,6 @@ export function decisionAnswerer(host: DecisionAnswerHost) {
           if (waiting) host.show(sessionId, waiting);
         }
       }
-      return sent;
     } finally {
       answering.delete(key);
     }

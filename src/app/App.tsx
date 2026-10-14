@@ -102,11 +102,7 @@ import {
 } from "../features/monos/ui/MonoOverview";
 import { MonoSettingsDialog } from "../features/monos/ui/MonoSettingsDialog";
 import { MonoActivityView } from "../features/monos/ui/MonoActivityView";
-import {
-  monoLaunchState,
-  monoSubagentQuestions,
-} from "../features/monos/model/monoSubagentQuestions";
-import { subagentAnswerer } from "../features/monos/model/monoSubagentAnswers";
+import { monoLaunchState } from "../features/monos/model/monoLaunchInput";
 import {
   monoSpawnedSessions,
   recordMonoSpawnedSession,
@@ -10428,26 +10424,6 @@ function Workspace({
     [],
   );
 
-  /**
-   * Answers a card a Mono's sub-agent left, from the Mono's chat. The
-   * sub-agent is opened first, since answering looks the card up where it is
-   * held; a failure is thrown for the Mono's card to show.
-   */
-  const answerSubagentDecision = useRef(
-    subagentAnswerer({
-      session: (sessionId) =>
-        sessionsRef.current.find((s) => s.id === sessionId),
-      open: (sessionId) => ensureOpenSessionRef.current(sessionId),
-      answer: (sessionId, cardId, reply) =>
-        answerDecision.current(sessionId, cardId, reply),
-    }),
-  );
-  const onMonoSubagentAnswer = useCallback(
-    (sessionId: string, cardId: string, reply: UserQuestionReply) =>
-      answerSubagentDecision.current(sessionId, cardId, reply),
-    [],
-  );
-
   const onQuestionInteraction = useCallback(
     (sessionId: string, requestId: number) => {
       const session = sessionsRef.current.find((s) => s.id === sessionId);
@@ -12785,26 +12761,6 @@ function Workspace({
     () => (monoViewBlocks ? artifactCards(monoViewBlocks) : []),
     [monoViewBlocks],
   );
-  // What its sub-agents are asking. One saved with a waiting card that is not
-  // open has no card to show yet, so it is opened, as clicking its launch card
-  // would; it is tried once while it waits, so one that is gone is not retried.
-  const monoSubagent = useMemo(
-    () => monoSubagentQuestions(monoLaunches, sessions, savedWaiting),
-    [monoLaunches, sessions, savedWaiting],
-  );
-  const subagentLoadAttempts = useRef(new Set<string>());
-  const subagentLoadKey = JSON.stringify(monoSubagent.unloaded);
-  useEffect(() => {
-    const attempts = subagentLoadAttempts.current;
-    for (const id of attempts) if (!savedWaiting.has(id)) attempts.delete(id);
-    for (const id of JSON.parse(subagentLoadKey) as string[]) {
-      if (attempts.has(id)) continue;
-      attempts.add(id);
-      void ensureOpenSession(id).catch((error) =>
-        console.error("Failed to open a sub-agent with a question:", error),
-      );
-    }
-  }, [subagentLoadKey, savedWaiting, ensureOpenSession]);
   const monoActivityView =
     monoViewSession && selectedMonoActivity ? (
       <MonoActivityView
@@ -13475,12 +13431,6 @@ function Workspace({
                                           : undefined
                                       }
                                       openMonoSessionId={shownMonoSessionId}
-                                      monoSubagentQuestions={
-                                        visible ? monoSubagent.ready : undefined
-                                      }
-                                      onMonoSubagentAnswer={
-                                        onMonoSubagentAnswer
-                                      }
                                     />
                                   </div>
                                 );

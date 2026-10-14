@@ -18,7 +18,7 @@ import type { MonoLook, MonoState } from "../model/mono";
 import {
   monoLaunchesNeedingInput,
   type SavedWaiting,
-} from "../model/monoSubagentQuestions";
+} from "../model/monoLaunchInput";
 import { HABITS_MAX } from "../model/monoHabits";
 import { HabitPage } from "./HabitPage";
 import { NewHabitPage } from "./NewHabitPage";

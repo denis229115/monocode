@@ -133,12 +133,11 @@ describe("answering a decision card", () => {
       shared.delivered.push(text);
       return true;
     });
-    // The caller is told, for a place that can show it was not sent.
-    expect(await answer("mono", "old", reply("yes"))).toBe(false);
+    await answer("mono", "old", reply("yes"));
     expect(shared.stored().outcome).toBeUndefined();
     expect(seen().outcome).toBeUndefined();
     refuse = false;
-    expect(await answer("mono", "old", reply("no"))).toBe(true);
+    await answer("mono", "old", reply("no"));
     expect(shared.delivered).toEqual(["Merge now?\nno"]);
     expect(shared.stored().outcome?.kind).toBe("answered");
   });
@@ -146,16 +145,8 @@ describe("answering a decision card", () => {
   it("dismisses a card whose questions were all skipped, without sending", async () => {
     const shared = store();
     const { host, answer } = window(shared);
-    expect(await answer("mono", "old", { kind: "skipped" })).toBe(true);
+    await answer("mono", "old", { kind: "skipped" });
     expect(host.send).not.toHaveBeenCalled();
     expect(shared.stored().outcome).toEqual({ kind: "dismissed", at: 7 });
-  });
-
-  it("says so when the card is not held here", async () => {
-    const shared = store();
-    const { host, answer } = window(shared);
-    host.card = () => undefined;
-    expect(await answer("mono", "old", reply("yes"))).toBe(false);
-    expect(shared.claim).not.toHaveBeenCalled();
   });
 });
