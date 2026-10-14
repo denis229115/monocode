@@ -64,7 +64,6 @@ vi.mock("../../../shared/ui/Popover", () => ({
 }));
 
 import { ModelControlPills, ModelPicker } from "./ModelPicker";
-import { saveProviderAccount } from "../../providers/model/providerAccounts";
 import {
   resetHarnessModelOverlays,
   saveRecentModelChoice,
@@ -1365,94 +1364,5 @@ describe("model picker", () => {
     expect(
       container.querySelector('[role="menu"][aria-label="Model and settings"]'),
     ).toBeNull();
-  });
-});
-
-describe("model picker accounts", () => {
-  const props = {
-    harness: "claude" as const,
-    model: "claude:sonnet",
-    values: {},
-    hideSettings: true,
-    onChange: vi.fn(),
-    onSettingsChange: vi.fn(),
-  };
-
-  function render(extra: Record<string, unknown>) {
-    act(() => root.render(createElement(ModelPicker, { ...props, ...extra })));
-  }
-  const trigger = () =>
-    container.querySelector<HTMLButtonElement>('button[aria-haspopup="dialog"]')!;
-  const radios = () =>
-    [...container.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
-
-  beforeEach(() => {
-    saveProviderAccount({ id: "account-work", provider: "claude", label: "Work" });
-  });
-
-  it("shows nothing extra when the surface names no account or there is only one", () => {
-    render({});
-    act(() => trigger().click());
-    expect(radios()).toHaveLength(0);
-    act(() => trigger().click());
-    localStorage.clear();
-    render({ accountId: "default" });
-    expect(trigger().textContent).not.toContain("·");
-    act(() => trigger().click());
-    expect(radios()).toHaveLength(0);
-  });
-
-  it("names a non-default account beside the model and lists every account in the model list", () => {
-    const onAccountChange = vi.fn();
-    render({ accountId: "account-work", onAccountChange });
-    expect(trigger().textContent).toContain("· Work");
-    expect(trigger().getAttribute("aria-label")).toContain("account Work");
-    act(() => trigger().click());
-    expect(radios().map((radio) => radio.textContent)).toEqual([
-      "Default account",
-      "Work",
-    ]);
-    expect(radios().map((radio) => radio.getAttribute("aria-checked"))).toEqual(
-      ["false", "true"],
-    );
-    act(() => radios()[0].click());
-    expect(onAccountChange).toHaveBeenCalledWith("default");
-    act(() => radios()[1].click());
-    expect(onAccountChange).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps the default account out of the trigger", () => {
-    render({ accountId: "default", onAccountChange: vi.fn() });
-    expect(trigger().textContent).not.toContain("·");
-  });
-
-  it("says when the account was removed, or why it fell back", () => {
-    render({ accountId: "account-gone", onAccountChange: vi.fn() });
-    expect(trigger().textContent).toContain("Removed account");
-    act(() => trigger().click());
-    expect(
-      container.querySelector("[data-model-account-notice]")?.textContent,
-    ).toBe("This account was removed. Pick another.");
-    act(() => trigger().click());
-    render({
-      accountId: "default",
-      accountNotice: "Its account was removed, so it uses the default account.",
-      onAccountChange: vi.fn(),
-    });
-    act(() => trigger().click());
-    expect(
-      container.querySelector("[data-model-account-notice]")?.textContent,
-    ).toBe("Its account was removed, so it uses the default account.");
-  });
-
-  it("offers no accounts for providers without profiles", () => {
-    render({
-      harness: "grok",
-      model: "grok:grok-4.6",
-      accountId: "default",
-      onAccountChange: vi.fn(),
-    });
-    act(() => trigger().click());
-    expect(radios()).toHaveLength(0);
   });
 });

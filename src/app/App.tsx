@@ -443,7 +443,6 @@ import {
   DEFAULT_PROVIDER_ACCOUNT_ID,
   providerAccountExists,
   selectedProviderAccountId,
-  selectProviderAccount,
   supportsProviderAccounts,
   type ProviderAccountProvider,
 } from "../features/providers/model/providerAccounts";
@@ -591,7 +590,6 @@ import {
 } from "../features/monos/model/monoFiles";
 import { useMonoHabits } from "./hooks/useMonoHabits";
 import { useMonoAccounts } from "./hooks/useMonoAccounts";
-import { subscribeSessionAccountRequests } from "../features/providers/model/sessionAccountRequest";
 import { useFloatingMono } from "./hooks/useFloatingMono";
 import {
   dropRelays,
@@ -2763,28 +2761,6 @@ function Workspace({
       setComposerFocused(true);
     },
     [active?.id, appendTab],
-  );
-
-  // The model selector in a conversation's composer asks for another account.
-  useEffect(
-    () =>
-      subscribeSessionAccountRequests((sessionId, accountId) => {
-        const session = sessionsRef.current.find(
-          (entry) => entry.id === sessionId,
-        );
-        if (
-          !session ||
-          !supportsProviderAccounts(session.harness) ||
-          !providerAccountExists(session.harness, accountId)
-        )
-          return;
-        const mono = monoForSession(sessionId);
-        if (mono) return pickMonoAccount(mono.id, session.harness, accountId);
-        selectProviderAccount(session.harness, session.cwd, accountId);
-        if (active?.id === sessionId)
-          onSelectProviderAccount(session.harness, accountId);
-      }),
-    [active?.id, onSelectProviderAccount],
   );
 
   const onOpenWhatsNew = useCallback((version: string) => {
@@ -9315,6 +9291,19 @@ function Workspace({
     [],
   );
 
+  // The usage chips under a Mono's composer pick its account.
+  const onPickMonoSessionAccount = useCallback(
+    (
+      sessionId: string,
+      provider: ProviderAccountProvider,
+      accountId: string,
+    ) => {
+      const mono = monoForSession(sessionId);
+      if (mono) pickMonoAccount(mono.id, provider, accountId);
+    },
+    [],
+  );
+
   const [usageLimitTick, setUsageLimitTick] = useState(0);
   useEffect(() => {
     const now = Date.now();
@@ -12697,6 +12686,7 @@ function Workspace({
     onUsageLimitResumeAtReset,
     onUsageLimitDismiss,
     onUsageLimitAccountChange,
+    onPickMonoAccount: onPickMonoSessionAccount,
     onInboxCardDismiss,
     onLinkedWorkItemUpdateCardDismiss,
     onNoteCardDismiss,
@@ -12922,10 +12912,6 @@ function Workspace({
         windowControls={monoCovers && !IS_MAC ? <WindowControls /> : undefined}
       />
     ) : null;
-  const monoAccount =
-    monoViewMono && monoViewSession
-      ? monoAccountState(monoViewMono, monoViewSession)
-      : { removed: false };
   const monoSettingsDialog =
     monoCovers &&
     monoViewMono &&
@@ -12941,12 +12927,7 @@ function Workspace({
         model={monoViewSession.model}
         modelSettings={monoViewSession.modelSettings}
         runtimeMode={monoViewSession.runtimeMode}
-        accountId={monoAccount.accountId}
-        accountRemoved={monoAccount.removed}
         busy={!!monoViewSession.busy}
-        onAccountChange={(accountId) =>
-          pickMonoAccount(monoViewMono.id, monoViewSession.harness, accountId)
-        }
         onModelChange={(harness, model) =>
           onModelChange(monoViewSession.id, harness, model)
         }
