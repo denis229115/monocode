@@ -1,14 +1,7 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
-import { ModelPicker } from "../../src/features/sessions/ui/ModelPicker";
-import {
-  requestSessionAccount,
-  subscribeSessionAccountRequests,
-} from "../../src/features/providers/model/sessionAccountRequest";
-import { UsageFooter } from "../../src/app/shell/UsageFooter";
+import { SessionPane } from "../../src/features/sessions/ui/SessionPane";
 import { useMonoAccounts } from "../../src/app/hooks/useMonoAccounts";
-import { MonoSettingsDialog } from "../../src/features/monos/ui/MonoSettingsDialog";
-import { useSessionAccountId } from "../../src/features/sessions/ui/ModelAccountSwitch";
 import {
   createMono,
   monoForSession,
@@ -18,10 +11,7 @@ import {
   saveMonoSessionId,
   subscribeMonos,
 } from "../../src/features/monos/model/mono";
-import {
-  monoAccountState,
-  pickMonoAccount,
-} from "../../src/features/monos/model/monoAccount";
+import { pickMonoAccount } from "../../src/features/monos/model/monoAccount";
 import {
   saveProviderAccount,
   type ProviderAccountProvider,
@@ -36,16 +26,25 @@ import "../../src/styles/index.css";
 
 // Native calls answer as an empty machine would; nothing here needs them.
 Object.assign(window, {
+  __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
   __TAURI_INTERNALS__: {
-    invoke: async () => null,
+    metadata: {
+      currentWindow: { label: "main" },
+      currentWebview: { windowLabel: "main", label: "main" },
+    },
+    invoke: async (cmd: string) => {
+      if (cmd === "plugin:event|listen") return 0;
+      if (cmd === "session_checkpoint_status") return { files: [] };
+      if (cmd.startsWith("list_") || cmd === "git_branches") return [];
+      return null;
+    },
     transformCallback: () => 0,
     unregisterCallback: () => {},
   },
 });
 
-// ?accounts=one leaves only the default login; ?removed=1 gives Pixi an
-// account that no longer exists; ?harness=devin has no profiles at all;
-// ?settings=1 opens the Mono's settings dialog over it.
+// ?accounts=one leaves only the default login; ?harness=devin has no
+// profiles at all; ?removed=1 gives Pixi an account that no longer exists.
 const params = new URLSearchParams(location.search);
 const harness = (params.get("harness") ?? "claude") as HarnessId;
 const MODEL: Partial<Record<HarnessId, string>> = {
@@ -88,34 +87,9 @@ saveMonoSessionId(pixi.id, "chat-pixi");
 saveMonoSessionId(nova.id, "chat-nova");
 if (params.get("removed")) saveMonoAccount(pixi.id, "claude", "account-gone");
 
-// A normal chat's composer: the same selector, asking the app for an account.
-function ChatComposer() {
-  const [account, setAccount] = useState("default");
-  useEffect(
-    () =>
-      subscribeSessionAccountRequests((id, next) => {
-        if (id === "chat-plain") setAccount(next);
-      }),
-    [],
-  );
-  return (
-    <div data-chat className="flex h-10 items-center border-t border-stroke px-4">
-      <ModelPicker
-        harness="claude"
-        model="claude:sonnet"
-        values={{}}
-        accountId={account}
-        onAccountChange={(next) => requestSessionAccount("chat-plain", next)}
-        onChange={() => {}}
-        onSettingsChange={() => {}}
-      />
-      <span data-chat-account hidden>
-        {account}
-      </span>
-    </div>
-  );
-}
+const noop = () => {};
 
+// A Mono's chat as the app draws it, with its composer under the transcript.
 function Fixture() {
   const [sessions, setSessions] = useState([
     chat("chat-pixi", params.get("removed") ? "account-gone" : "default"),
@@ -125,87 +99,75 @@ function Fixture() {
   const rosterKey = useSyncExternalStore(subscribeMonos, monosSnapshot);
   useMonoAccounts(sessions, setSessions, rosterKey);
   const session = sessions.find((entry) => entry.id === selected)!;
-  const mono = monoForSession(selected)!;
-  const account = monoAccountState(mono, session);
-  const composerAccount = useSessionAccountId(session);
-  const pick = (provider: ProviderAccountProvider, accountId: string) =>
-    pickMonoAccount(mono.id, provider, accountId);
-  // The app's side of a composer's request: a Mono's chat takes its account.
-  useEffect(
-    () =>
-      subscribeSessionAccountRequests((id, next) => {
-        const owner = monoForSession(id);
-        if (owner) pickMonoAccount(owner.id, harness, next);
-      }),
-    [],
-  );
+  // The app's side of a pick in the composer's usage chips.
+  const onPickMonoAccount = (
+    sessionId: string,
+    provider: ProviderAccountProvider,
+    accountId: string,
+  ) => {
+    const owner = monoForSession(sessionId);
+    if (owner) pickMonoAccount(owner.id, provider, accountId);
+  };
   return (
-    <div data-fixture className="flex h-[560px] w-[900px] flex-col bg-background-base">
-      <div className="flex min-h-0 flex-1">
-        <div className="flex flex-1 gap-2 p-4">
-          {sessions.map((entry) => (
-            <button
-              key={entry.id}
-              type="button"
-              data-select={entry.id}
-              onClick={() => setSelected(entry.id)}
-              className="h-7 rounded-md bg-selection px-3 text-[12px]"
-            >
-              {monoLook(monoForSession(entry.id)!).name}
-            </button>
-          ))}
-        </div>
+    <div data-fixture className="flex h-[640px] w-[900px] flex-col bg-background-base">
+      <div className="flex gap-2 border-b border-stroke p-2">
+        {sessions.map((entry) => (
+          <button
+            key={entry.id}
+            type="button"
+            data-select={entry.id}
+            onClick={() => setSelected(entry.id)}
+            className="h-7 rounded-md bg-selection px-3 text-[12px]"
+          >
+            {monoLook(monoForSession(entry.id)!).name}
+          </button>
+        ))}
       </div>
-      {/* Beneath a Mono's composer: asks the app, which hands it to the Mono. */}
-      <div
-        data-mono-model
-        className="flex h-9 items-center border-t border-stroke px-4"
-      >
-        <ModelPicker
-          harness={session.harness}
-          model={session.model}
-          values={session.modelSettings}
-          hideSettings
-          variant="text"
-          accountId={composerAccount}
-          onAccountChange={(next) => requestSessionAccount(session.id, next)}
-          onChange={() => {}}
-          onSettingsChange={() => {}}
-        />
-      </div>
-      {params.get("settings") ? (
-        <MonoSettingsDialog
-          monoId={mono.id}
-          agent={monoLook(mono)}
-          status="idle"
-          cwd={session.cwd}
-          harness={session.harness}
-          model={session.model}
-          modelSettings={session.modelSettings}
-          runtimeMode={session.runtimeMode}
-          accountId={account.accountId}
-          accountRemoved={account.removed}
-          onAccountChange={(accountId) =>
-            pickMonoAccount(mono.id, session.harness, accountId)
+      <div className="min-h-0 flex-1" data-mono-pane>
+        <SessionPane
+          key={session.id}
+          session={session}
+          visible
+          focused
+          inSplit={false}
+          composerFocused={false}
+          recents={[]}
+          hideProjectPicker
+          onFocus={noop}
+          onClose={noop}
+          onCwdChange={noop}
+          onBranchChange={noop}
+          onWorkspaceModeChange={noop}
+          onWorktreeBaseChange={noop}
+          onModelChange={noop}
+          onModelSettingsChange={noop}
+          onRuntimeModeChange={noop}
+          onSaveDraft={noop}
+          onRemoveDraft={noop}
+          onSubmit={noop}
+          onStop={noop}
+          onCompactContext={() => false}
+          onPlaceSessionInFolder={noop}
+          onDeleteQueuedMessage={noop}
+          onEditQueuedMessage={noop}
+          onQueuedMessageEditingChange={noop}
+          onSteerQueuedMessage={noop}
+          onResumeQueue={noop}
+          onUsageLimitResume={noop}
+          onUsageLimitResumeAtReset={noop}
+          onUsageLimitDismiss={noop}
+          onPickMonoAccount={
+            params.get("picker") === "off" ? undefined : onPickMonoAccount
           }
-          onModelChange={() => {}}
-          onModelSettingsChange={() => {}}
-          onRuntimeModeChange={() => {}}
-          onClose={() => {}}
+          onApproval={noop}
+          onQuestionReply={noop}
+          onOpenFile={noop}
+          onOpenDiff={noop}
+          onOpenPlan={noop}
+          onBuildPlan={noop}
+          onNewTerminal={noop}
         />
-      ) : null}
-      {params.get("chat") ? <ChatComposer /> : null}
-      <UsageFooter
-        providers={[session.harness as "claude"]}
-        session={{
-          id: session.id,
-          harness: session.harness,
-          model: session.model,
-          providerAccountId: account.accountId ?? session.providerAccountId,
-        }}
-        project={session.cwd}
-        onPickAccount={pick}
-      />
+      </div>
       <pre data-log hidden>
         {JSON.stringify(
           sessions.map((entry) => ({
