@@ -70,6 +70,8 @@ import {
 import { MonoHeader } from "../../monos/ui/MonoHeader";
 import { MonoComposer } from "../../monos/ui/MonoComposer";
 import type { LaunchedSessionView } from "../../monos/model/monoSpawnedSessions";
+import type { MonoSubagentQuestion } from "../../monos/model/monoSubagentQuestions";
+import { MonoSubagentQuestions } from "../../monos/ui/MonoSubagentQuestions";
 import { ModelControlPills, ModelPicker } from "./ModelPicker";
 import { ContextMeter } from "./ContextMeter";
 import { UsageChips } from "../../../app/shell/UsageFooter";
@@ -156,6 +158,13 @@ export type SessionPaneProps = {
   monoLaunchedSessions?: ReadonlyMap<string, LaunchedSessionView>;
   /** The launched session open in the Mono's sidebar. */
   openMonoSessionId?: string;
+  /** Cards its sub-agents wait on, answered from its chat. */
+  monoSubagentQuestions?: readonly MonoSubagentQuestion[];
+  onMonoSubagentAnswer?: (
+    sessionId: string,
+    cardId: string,
+    reply: UserQuestionReply,
+  ) => Promise<void>;
   recents: RecentProject[];
   hideProjectPicker?: boolean;
   onFocus: (sessionId: string) => void;
@@ -368,6 +377,8 @@ const LocalSessionPane = memo(function LocalSessionPane({
   onOpenMonoSession,
   monoLaunchedSessions,
   openMonoSessionId,
+  monoSubagentQuestions,
+  onMonoSubagentAnswer,
   onOpenPlan,
   onBuildPlan,
   onSecondOpinion,
@@ -1184,7 +1195,24 @@ const LocalSessionPane = memo(function LocalSessionPane({
                       }
                     />
                   ) : (
-                    decisionPanel
+                    (decisionPanel ??
+                    (monoSubagentQuestions?.length && onMonoSubagentAnswer ? (
+                      <MonoSubagentQuestions
+                        questions={monoSubagentQuestions}
+                        onAnswer={onMonoSubagentAnswer}
+                        onOpenSession={
+                          onOpenMonoSession
+                            ? (launchedId) =>
+                                onOpenMonoSession(
+                                  session.id,
+                                  "",
+                                  [],
+                                  launchedId,
+                                )
+                            : undefined
+                        }
+                      />
+                    ) : null))
                   )}
                   {session.usageLimit ? (
                     <MonoUsageLimitNotice
