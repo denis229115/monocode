@@ -103,7 +103,11 @@ import {
 import { MonoSettingsDialog } from "../features/monos/ui/MonoSettingsDialog";
 import { MonoActivityView } from "../features/monos/ui/MonoActivityView";
 import {
-  launchedSessionState,
+  monoLaunchState,
+  monoSubagentQuestions,
+} from "../features/monos/model/monoSubagentQuestions";
+import { subagentAnswerer } from "../features/monos/model/monoSubagentAnswers";
+import {
   monoSpawnedSessions,
   recordMonoSpawnedSession,
   type LaunchedSessionState,
@@ -10424,6 +10428,26 @@ function Workspace({
     [],
   );
 
+  /**
+   * Answers a card a Mono's sub-agent left, from the Mono's chat. The
+   * sub-agent is opened first, since answering looks the card up where it is
+   * held; a failure is thrown for the Mono's card to show.
+   */
+  const answerSubagentDecision = useRef(
+    subagentAnswerer({
+      session: (sessionId) =>
+        sessionsRef.current.find((s) => s.id === sessionId),
+      open: (sessionId) => ensureOpenSessionRef.current(sessionId),
+      answer: (sessionId, cardId, reply) =>
+        answerDecision.current(sessionId, cardId, reply),
+    }),
+  );
+  const onMonoSubagentAnswer = useCallback(
+    (sessionId: string, cardId: string, reply: UserQuestionReply) =>
+      answerSubagentDecision.current(sessionId, cardId, reply),
+    [],
+  );
+
   const onQuestionInteraction = useCallback(
     (sessionId: string, requestId: number) => {
       const session = sessionsRef.current.find((s) => s.id === sessionId);
@@ -12761,6 +12785,26 @@ function Workspace({
     () => (monoViewBlocks ? artifactCards(monoViewBlocks) : []),
     [monoViewBlocks],
   );
+  // What its sub-agents are asking. One saved with a waiting card that is not
+  // open has no card to show yet, so it is opened, as clicking its launch card
+  // would; it is tried once while it waits, so one that is gone is not retried.
+  const monoSubagent = useMemo(
+    () => monoSubagentQuestions(monoLaunches, sessions, savedWaiting),
+    [monoLaunches, sessions, savedWaiting],
+  );
+  const subagentLoadAttempts = useRef(new Set<string>());
+  const subagentLoadKey = JSON.stringify(monoSubagent.unloaded);
+  useEffect(() => {
+    const attempts = subagentLoadAttempts.current;
+    for (const id of attempts) if (!savedWaiting.has(id)) attempts.delete(id);
+    for (const id of JSON.parse(subagentLoadKey) as string[]) {
+      if (attempts.has(id)) continue;
+      attempts.add(id);
+      void ensureOpenSession(id).catch((error) =>
+        console.error("Failed to open a sub-agent with a question:", error),
+      );
+    }
+  }, [subagentLoadKey, savedWaiting, ensureOpenSession]);
   const monoActivityView =
     monoViewSession && selectedMonoActivity ? (
       <MonoActivityView
@@ -12818,13 +12862,13 @@ function Workspace({
   const monoLaunchesKey = JSON.stringify(
     monoLaunches.map((launch) => {
       const live = sessions.find((entry) => entry.id === launch.sessionId);
-      return live
-        ? [launch.sessionId, launchedSessionState(live), live.title]
-        : [
-            launch.sessionId,
-            "done",
-            storedLaunchTitles.get(launch.sessionId) || launch.title,
-          ];
+      return [
+        launch.sessionId,
+        monoLaunchState(live, launch.sessionId, savedWaiting),
+        live
+          ? live.title
+          : storedLaunchTitles.get(launch.sessionId) || launch.title,
+      ];
     }),
   );
   const monoLaunchedSessions = useMemo(
@@ -12889,6 +12933,7 @@ function Workspace({
         launches={monoLaunches}
         sessions={sessions}
         history={history}
+        savedWaiting={savedWaiting}
         documents={monoDocuments}
         activity={monoActivityView}
         changes={{
@@ -13430,6 +13475,12 @@ function Workspace({
                                           : undefined
                                       }
                                       openMonoSessionId={shownMonoSessionId}
+                                      monoSubagentQuestions={
+                                        visible ? monoSubagent.ready : undefined
+                                      }
+                                      onMonoSubagentAnswer={
+                                        onMonoSubagentAnswer
+                                      }
                                     />
                                   </div>
                                 );

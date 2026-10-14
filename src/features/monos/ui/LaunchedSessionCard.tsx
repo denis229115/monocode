@@ -76,8 +76,8 @@ const STATUS: Record<LaunchedSessionState, { label: string; icon: ReactNode }> =
 
 /**
  * A session the Mono started, as a line under its reply like an artifact:
- * a spinner while it works, a check once it is done, and the project it runs
- * in. Without `view` (a window that does not track sessions) it shows no
+ * a spinner while it works, a check once it is done, a labelled amber mark
+ * while it waits on an answer, and the project it runs in. Without `view` (a window that does not track sessions) it shows no
  * status.
  */
 export function LaunchedSessionCard({
@@ -97,6 +97,7 @@ export function LaunchedSessionCard({
     launch.harness,
   );
   const status = view ? STATUS[view.state] : undefined;
+  const waiting = view?.state === "input";
   return (
     <button
       type="button"
@@ -107,7 +108,7 @@ export function LaunchedSessionCard({
       title={status?.label}
       onClick={onOpen}
       disabled={!onOpen}
-      className={`flex w-fit max-w-[min(24rem,100%)] min-w-0 items-center gap-2.5 rounded-xl border py-1.5 pr-1.5 pl-3 text-left font-sans transition-colors hover:border-content/20 hover:bg-content/5 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent disabled:opacity-60 ${open ? "border-content/20 bg-content/5" : "border-content/10"}`}
+      className={`flex w-fit max-w-[min(24rem,100%)] min-w-0 items-center gap-2.5 rounded-xl border py-1.5 pr-1.5 pl-3 text-left font-sans transition-colors hover:border-content/20 hover:bg-content/5 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent disabled:opacity-60 ${waiting ? "border-amber-400/40 bg-amber-400/5 hover:border-amber-400/60 hover:bg-amber-400/10" : open ? "border-content/20 bg-content/5" : "border-content/10"}`}
     >
       {status?.icon ?? (
         <Chatting
@@ -116,6 +117,15 @@ export function LaunchedSessionCard({
         />
       )}
       <span className="min-w-0 truncate text-[13px] text-content">{title}</span>
+      {/* The one state that asks something of the reader says so in words. */}
+      {waiting ? (
+        <span
+          data-launched-session-waiting
+          className="shrink-0 whitespace-nowrap text-[12px] text-amber-400"
+        >
+          Needs input
+        </span>
+      ) : null}
       {/* Squeezed, the title gives way first and the project after it. */}
       <span
         className="flex min-w-0 max-w-[45%] shrink-0 items-center gap-1 rounded-full border border-content/10 bg-content/5 px-2 py-0.5 text-[12px] text-content/65"

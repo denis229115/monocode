@@ -257,6 +257,27 @@ it("dots the folded Changes icon while there are changes", async () => {
   expect(tabs()[3].querySelector("[data-changes-dot]")).toBeNull();
 });
 
+it("dots the folded Sessions icon while a session waits on an answer", async () => {
+  await render("documents");
+  expect(tabs()[0].querySelector("[data-needs-input-dot]")).toBeNull();
+  // "b" is not open here; its saved card is what says it waits.
+  await render("documents", vi.fn(), {
+    savedWaiting: new Map([["b", undefined]]),
+  });
+  expect(tabs()[0].querySelector("[data-needs-input-dot]")).not.toBeNull();
+  expect(tabs()[0].querySelector("[data-changes-dot]")).toBeNull();
+  // Open, the tab names itself and its rows show which one.
+  await render("sessions", vi.fn(), {
+    savedWaiting: new Map([["b", undefined]]),
+  });
+  expect(tabs()[0].querySelector("[data-needs-input-dot]")).toBeNull();
+  expect(
+    container
+      .querySelector('[data-mono-session="b"]')
+      ?.hasAttribute("data-needs-input"),
+  ).toBe(true);
+});
+
 it("lists every session it started, newest first", async () => {
   await render("sessions");
   const rows = [...container.querySelectorAll("[data-mono-session]")];

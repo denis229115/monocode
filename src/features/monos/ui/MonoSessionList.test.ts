@@ -413,3 +413,54 @@ it("mounts a page of cards at a time and the next as the list nears its end", as
   await act(async () => intersect?.([{ isIntersecting: true }]));
   expect(container.querySelectorAll("[data-mono-session]")).toHaveLength(40);
 });
+
+it("marks a session that left a decision card as needing input, open or only saved", async () => {
+  const waiting = {
+    id: "card",
+    turnId: "turn",
+    askedAt: 1,
+    questions: [],
+  };
+  const child = {
+    ...newSession("codex", "/repo"),
+    id: launch.sessionId,
+    decisionCards: [waiting],
+  };
+  await render([child]);
+  const row = container.querySelector("[data-mono-session]")!;
+  expect(row.getAttribute("data-needs-input")).not.toBeNull();
+  expect(row.textContent).toContain("Needs input");
+  // Answered, it is an ordinary row again.
+  await render([
+    {
+      ...child,
+      decisionCards: [{ ...waiting, outcome: { kind: "dismissed", at: 2 } }],
+    },
+  ]);
+  expect(
+    container
+      .querySelector("[data-mono-session]")!
+      .getAttribute("data-needs-input"),
+  ).toBeNull();
+  expect(container.textContent).not.toContain("Needs input");
+
+  // Not open here: its saved card is all that is known, once it is looked up.
+  vi.mocked(listSessionsByProject).mockResolvedValue([
+    {
+      id: launch.sessionId,
+      cwd: "/repo",
+      harness: "codex",
+      model: "gpt-6",
+      runtimeMode: "auto",
+      title: launch.title,
+      createdAt: 1,
+      updatedAt: 2,
+    } as SessionSummary,
+  ]);
+  await render([], [launch], {
+    savedWaiting: new Map([[launch.sessionId, undefined]]),
+  });
+  const saved = container.querySelector("[data-mono-session]")!;
+  expect(saved.getAttribute("data-needs-input")).not.toBeNull();
+  expect(saved.textContent).toContain("Needs input");
+});
